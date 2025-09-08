@@ -447,3 +447,16 @@ class ModularPolicyGRU(nn.Module):
                 Q[:, i] *= sparsity_matrix[:, i]
 
         return Q
+
+
+# Freeze input or output part of the network during training by zeroing out corresponding mask entries.
+    def freeze(self, input_freeze, output_freeze):
+        if input_freeze:
+            with th.no_grad():
+                self.mask_Wz[:, :self.input_size] = 0
+                self.mask_Wr[:, :self.input_size] = 0
+                self.mask_Wh[:, :self.input_size] = 0
+
+        if output_freeze:
+            with th.no_grad():
+                self.mask_Y[:] = 0
