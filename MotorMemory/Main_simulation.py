@@ -1,0 +1,170 @@
+import os
+from selectors import SelectSelector
+
+import torch as th
+import motornet as mn
+import Env, Task
+from utils import policy_mod
+from PolicyLoad import creat_policy
+from Model import run_batches, test_batches, calculate_deviations
+from joblib import Parallel, delayed
+
+class ExpConfig:
+    def __init__(self, net_id, mode = 'test', exp_name='center_out'):
+        self.mode = mode
+        self.net_id = net_id
+        self.exp = exp_name
+        self.dt = 0.01
+        self.ep_dur = 2.0
+        self.device = th.device("cpu")
+        self.saveLoc = f"/Users/pounemirzazadeh/Motornet/MultiNet/Modular_version/task_{task_id}/"
+        os.makedirs(self.saveLoc, exist_ok=True)
+        # Configuration for phases:
+        if self.mode == 'train':
+            self._setup_training()
+        else:
+            self._setup_testing()
+    def _setup_training(self):
+        self.batch_size = 32
+        #Suggestion: growing up can be trained and saved separately once, and then for all experiments we just load its saved weights
+        self.phases = ['growing_up','NF1', 'FF1', 'NF2']
+        self.k_values = [0,0,8,0]
+        self.n_batches = [1000,700,200,100]
+        self.training_random = [True, False, False, False] # This is useful for the senarios that growing up is part of the training phases
+        self.load_baseline = [False, True, False, False] # This is useful for the senarios that growing up is just loaded
+        self.run_modes = [f"{mode}_rand"] + [f"{mode}_{self.exp}"]*3
+        self.exp_save_names = ["baseline"] + [f"{self.exp}"]*3
+
+    def _setup_testing(self):
+        self.batch_size = 128
+        self.phases = ['NF1', 'FF1', 'NF2']
+        self.k_values = [0, 8, 0]
+        self.n_batches = [1, 1, 1]
+        self.run_modes = f"{mode}_{self.exp}"
+        self.contextual_cue = 'left'
+        self.force_field = 'CCW'
+
+
+
+
+def create_setup(cfg):
+    mm = mn.muscle.RigidTendonHillMuscle()
+    ee = mn.effector.RigidTendonArm26(muscle=mm, timestep=cfg.dt)
+    env = Env.ExpTaskEnv(max_ep_duration=cfg.ep_dur, effector=ee, proprioception_delay=0.01, vision_delay=0.07,
+                         proprioception_noise=1e-3, vision_noise=1e-3, action_noise=1e-4)
+    obs, info = env.reset()
+    task = Task.ExpTask(effector=ee)
+    return env, task
+
+
+def run_training(env, task, cfg):
+    n_t = int(cfg.ep_dur / env.effector.dt)
+    inputs, targets, init_states = task.generate(1, n_t)
+    results = {}
+
+    for i , (phase, k_value, n_batch, training_random_flag, load_baseline_flag, run_mode, exp_save_name) in (
+            enumerate(zip(cfg.phases, cfg.k_values, cfg.n_batches, cfg.training_random, cfg.load_baseline, cfg.run_modes, cfg.exp_save_names))):
+
+        print(f"Running phase: {phase}")
+        input_freeze, output_freeze, optimizer_mod, learning_rate = policy_mod(phase)
+        policy, optimizer = creat_policy(env = env, inputs = inputs, device = cfg.device, policy_func=mn.policy.ModularPolicyGRU, optimizer_mod=optimizer_mod, learning_rate=learning_rate)
+
+        if "growing_up" in cfg.phases:
+            if not training_random_flag:
+             policy.load_state_dict(th.load(cfg.saveLoc + f'weights_{cfg.phases[i-1]}_{cfg.exp_save_names[i-1]}'))
+             policy.freeze(input_freeze=input_freeze, output_freeze=output_freeze)
+            else:
+                pass
+        else:
+            if load_baseline_flag:
+                policy.load_state_dict(th.load(cfg.saveLoc + f'weights_growing_up_baseline'))
+                policy.freeze(input_freeze=input_freeze, output_freeze=output_freeze)
+            else:
+                policy.load_state_dict(th.load(cfg.saveLoc + f'weights_{cfg.phases[i-1]}_{cfg.exp_save_names[i-1]}'))
+                policy.freeze(input_freeze=input_freeze, output_freeze=output_freeze)
+                pass
+
+        force_field = 'random' if phase == 'FF1' else 'null'
+        contextual_cue = 'random' if phase in ['NF1', 'NF2'] else 'force_dependent'
+        interval = 50 if phase == 'NF1' else 10
+
+        losses, endpoint_dev, lateral_dev, weights = run_batches(
+            env=env, task=task, policy=policy, optimizer=optimizer, n_batches=n_batch,
+            batch_size=cfg.batch_size, interval=interval, ep_dur=cfg.ep_dur, device=cfg.device, run_mode=run_mode,
+            simulation_mode=cfg.mode, force_field=force_field, contextual_cue=contextual_cue, k=k_value)
+
+        # Store results
+        results[phase] = {
+            'losses': losses,
+            'endpoint_dev': endpoint_dev,
+            'lateral_dev': lateral_dev
+        }
+        if phase == 'growing_up':
+            th.save(results, cfg.saveLoc + f"results_baseline")
+            results = {}
+        else:
+            pass
+
+
+        th.save(policy.state_dict(), cfg.saveLoc + f'weights_{cfg.phases[i]}_{cfg.exp_save_names[i]}')
+        th.save(weights, cfg.saveLoc + f'weightsDic_{cfg.phases[i]}_{cfg.exp_save_names}')
+
+    th.save(results, cfg.saveLoc + f"results_{cfg.exp}")
+
+
+
+def run_testing(env, task, cfg):
+    n_t = int(cfg.ep_dur / env.effector.dt)
+    inputs, targets, init_states = task.generate(1, n_t)
+    test_data = {}
+    deviations = {}
+    for i, phase in enumerate(cfg.phases):
+        test_data[phase] = {}
+        deviations[phase] = {}
+        input_freeze, output_freeze, optimizer_mod, learning_rate = policy_mod(phase='growing_up')
+        policy, optimizer = creat_policy(env=env, inputs=inputs, device=cfg.device, policy_func=mn.policy.ModularPolicyGRU,
+                                         optimizer_mod=optimizer_mod, learning_rate=learning_rate)
+        weights = th.load(cfg.saveLoc + f'weightsDic_{phase}_{cfg.exp}')
+        for batch_number in weights.keys():
+            deviations[phase][batch_number] = {}
+            policy.load_state_dict(weights[batch_number])
+
+            testdata = test_batches(env=env, task=task, policy=policy, n_batches=1, batch_size=cfg.batch_size, interval=1,
+                                    ep_dur=cfg.ep_dur, device=cfg.device, run_mode=cfg.run_mode,
+                                    simulation_mode=cfg.mode, force_field=cfg.force_field, contextual_cue=cfg.contextual_cue,
+                                    k=cfg.k_values[i], title=f'{cfg.exp} - {phase} - {cfg.net_id} - batch = {batch_number}')
+
+            lat_dev, end_dev = calculate_deviations(task, testdata, n_t, eps=1e-6)
+            test_data[phase][batch_number] = testdata
+            deviations[phase][batch_number]['lateral'] = lat_dev
+            deviations[phase][batch_number]['endpoint'] = end_dev
+
+    th.save(test_data, cfg.saveLoc + f"test_data_{cfg.exp}_{cfg.force_field}")
+    th.save(deviations, cfg.saveLoc + f"deviations_{cfg.exp}_{cfg.force_field}")
+
+
+def exp_simulation(net_id = 1, mode='test', exp='center_out'):
+    cfg = ExpConfig(net_id, mode = mode, exp_name=exp)
+    env, task = create_setup(cfg)
+
+    if mode == 'train':
+        run_training(env = env, task = task, cfg = cfg)
+    elif mode == 'test':
+        run_testing(env = env, task = task, cfg = cfg)
+
+
+if __name__ == "__main__":
+
+    num_networks = 4 # Number of networks/subjects
+    mode = 'test'  # Set to 'train' to run the learning loop
+    exp = 'center_out'
+    # List of Expriments:
+    # 1. center_out     (Exp2 Howard et al. 2013)
+    # 2. mov_diff_loc   (Exp3 Howard et al. 2013)
+    # 3. pro_loc        (Exp8 Howard et al. 2013)
+    # 4. vis_loc        (Exp7 Howard et al. 2013)
+
+    Parallel(n_jobs=num_networks)(
+        delayed(exp_simulation)(net_id = i, mode=mode, exp=exp) for i in range(num_networks)
+    )
+    print(f" The {mode} mode for experiment {exp} completed across {num_networks} networks.")
