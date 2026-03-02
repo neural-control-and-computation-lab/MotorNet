@@ -2,6 +2,7 @@ import torch as th
 import numpy as np
 from Plots import plot_episode
 from utils import applied_load
+import copy
 
 # Run a single episode
 def run_episode(env, task, policy, batch_size, n_t, device, force_field = 'null', contextual_cue = 'null', k = 0, *args, **kwargs ):
@@ -31,7 +32,7 @@ def run_episode(env, task, policy, batch_size, n_t, device, force_field = 'null'
 
     inputs, targets, init_states = task.generate(batch_size, n_t, *args, **kwargs)
     targets = th.tensor(targets[:, :, 0:2], device=device, dtype=th.float)
-    inp = th.tensor(inputs['inputs'], device=device, dtype=th.float)
+    inp = th.tensor(inputs, device=device, dtype=th.float)
     init_states = th.tensor(init_states, device=device, dtype=th.float)
 
     h = policy.init_hidden(batch_size)
@@ -48,7 +49,6 @@ def run_episode(env, task, policy, batch_size, n_t, device, force_field = 'null'
     all_inp = []
     all_vis_inp = []
     all_joint = []
-    all_fingertips = []
 
 
     while not terminated:  # will run until `max_ep_duration` is reached
@@ -62,8 +62,8 @@ def run_episode(env, task, policy, batch_size, n_t, device, force_field = 'null'
         force_field  = applied_load(endpoint_vel = info['states']['cartesian'][:, 2:], k = k, mode = force_dir)
         masked_force_field = force_field * force_mask
 
-
         obs, reward, terminated, truncated, info = env.step(action=action, endpoint_load = masked_force_field)
+        # print(obs, obs.shape)
         xy.append(info['states']['cartesian'][:, None, :])
         all_actions.append(action[:, None, :])
         all_muscle.append(info['states']['muscle'][:, 0, None, :])
@@ -127,18 +127,6 @@ def calculate_deviations(task, episode_data, n_t, eps = 1e-6):
     ratio = numerator[nonzero_den] / denominator[nonzero_den]
     lateral = th.mean(ratio[th.arange(ratio.shape[0]),(th.max(th.abs(ratio), dim=1)[1])])
 
-    ## Check zero values in numerator and denominator
-    # eps = 1e-6
-    # print(f'numerator size: {numerator.shape} and denominator size: {denominator.shape}')
-    # zero_den = denominator.abs() < eps
-    # zero_num = numerator.abs() < eps
-    # both_zero = zero_den & zero_num
-    # zero_den_nonzero_num = zero_den & (~zero_num)
-    # print("number of times where denominator near 0 and numerator not:")
-    # print(zero_den_nonzero_num.nonzero().shape)
-    # print("number of times where both are near 0:")
-    # print(both_zero.nonzero().shape)
-
     endpoint = th.mean(th.norm(targets[:, -1, :] - xy[:, -1, :2], dim=1))
 
     return lateral, endpoint
@@ -154,8 +142,7 @@ def run_batches(env, task, policy, optimizer, n_batches, batch_size, interval, e
     jerk_losses = []
     endpoint_dev = []
     lateral_dev = []
-    weight_1 = []
-    weight_end = []
+    weight_dic = {}
     task.run_mode = run_mode
     n_t = int(ep_dur / env.effector.dt) + 1
     for batch in range(n_batches):
@@ -186,23 +173,21 @@ def run_batches(env, task, policy, optimizer, n_batches, batch_size, interval, e
         # Optional visualization
         # plot_episode(task, batch, n_batches, interval, episode_data)
 
-        if batch == 1:
-            weight_1 = policy.state_dict()
-        elif batch == n_batches - 1:
-            weight_end = policy.state_dict()
+        if batch % interval == 0 or batch == n_batches - 1:
+            weight_dic[f'{batch}'] = copy.deepcopy(policy.state_dict())
 
     return {'total' : total_losses, 'cartesian': cartesian_losses, 'muscle': muscle_losses, 'spectral': spectral_losses,
-            'jerk': jerk_losses}, endpoint_dev, lateral_dev, {'first': weight_1, 'end': weight_end}
+            'jerk': jerk_losses}, endpoint_dev, lateral_dev, weight_dic
 
 
 # Run test episodes without training.
-def test_batches(env, task, policy, n_batches, batch_size, interval, ep_dur, device, run_mode, *args, **kwargs ):
+def test_batches(env , task, policy, n_batches, batch_size, interval, ep_dur, device, run_mode, *args, **kwargs ):
     task.run_mode = run_mode
     n_t = int(ep_dur / env.effector.dt) + 1
     for batch in range(n_batches):
         episode_data = run_episode(env = env, task = task, policy = policy, batch_size = batch_size, n_t = n_t, device = device, *args, **kwargs)
-
-        plot_episode(task, batch, n_batches, interval, episode_data)
+        title =  kwargs.get('title', None)
+        # plot_episode(task, batch, n_batches, interval, episode_data, title=title)
 
     return episode_data
 
