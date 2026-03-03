@@ -17,7 +17,7 @@ class ExpConfig:
         self.dt = 0.01
         self.ep_dur = 2.0
         self.device = th.device("cpu")
-        self.saveLoc = f"/Users/pounemirzazadeh/Motornet/MultiNet/Modular_version/task_{task_id}/"
+        self.saveLoc = f"/Users/pounemirzazadeh/Motornet/MultiNet/Modular_version/task_{net_id}/"
         os.makedirs(self.saveLoc, exist_ok=True)
         # Configuration for phases:
         if self.mode == 'train':
@@ -27,13 +27,13 @@ class ExpConfig:
     def _setup_training(self):
         self.batch_size = 32
         #Suggestion: growing up can be trained and saved separately once, and then for all experiments we just load its saved weights
-        self.phases = ['growing_up','NF1', 'FF1', 'NF2']
-        self.k_values = [0,0,8,0]
-        self.n_batches = [1000,700,200,100]
-        self.training_random = [True, False, False, False] # This is useful for the senarios that growing up is part of the training phases
-        self.load_baseline = [False, True, False, False] # This is useful for the senarios that growing up is just loaded
-        self.run_modes = [f"{mode}_rand"] + [f"{mode}_{self.exp}"]*3
-        self.exp_save_names = ["baseline"] + [f"{self.exp}"]*3
+        self.phases = ['NF1', 'FF1', 'NF2'] #['growing_up','NF1', 'FF1', 'NF2']
+        self.k_values = [0,8,0] #[0,0,8,0]
+        self.n_batches = [700,200,100] #[1000,700,200,100]
+        self.training_random = [False, False, False] #[True, False, False, False] # This is useful for the senarios that growing up is part of the training phases
+        self.load_baseline = [True, False, False]  # [False, True, False, False] # This is useful for the senarios that growing up is just loaded
+        self.run_modes = [f"{mode}_{self.exp}"]*3 #[f"{mode}_rand"] + [f"{mode}_{self.exp}"]*3
+        self.exp_save_names = [f"{self.exp}"]*3 #["baseline"] + [f"{self.exp}"]*3
 
     def _setup_testing(self):
         self.batch_size = 128
@@ -107,14 +107,14 @@ def run_training(env, task, cfg):
 
 
         th.save(policy.state_dict(), cfg.saveLoc + f'weights_{cfg.phases[i]}_{cfg.exp_save_names[i]}')
-        th.save(weights, cfg.saveLoc + f'weightsDic_{cfg.phases[i]}_{cfg.exp_save_names}')
+        th.save(weights, cfg.saveLoc + f'weightsDic_{cfg.phases[i]}_{cfg.exp_save_names[i]}')
 
     th.save(results, cfg.saveLoc + f"results_{cfg.exp}")
 
 
 
 def run_testing(env, task, cfg):
-    n_t = int(cfg.ep_dur / env.effector.dt)
+    n_t = int(cfg.ep_dur / env.effector.dt) + 1
     inputs, targets, init_states = task.generate(1, n_t)
     test_data = {}
     deviations = {}
@@ -130,7 +130,7 @@ def run_testing(env, task, cfg):
             policy.load_state_dict(weights[batch_number])
 
             testdata = test_batches(env=env, task=task, policy=policy, n_batches=1, batch_size=cfg.batch_size, interval=1,
-                                    ep_dur=cfg.ep_dur, device=cfg.device, run_mode=cfg.run_mode,
+                                    ep_dur=cfg.ep_dur, device=cfg.device, run_mode=cfg.run_modes,
                                     simulation_mode=cfg.mode, force_field=cfg.force_field, contextual_cue=cfg.contextual_cue,
                                     k=cfg.k_values[i], title=f'{cfg.exp} - {phase} - {cfg.net_id} - batch = {batch_number}')
 
@@ -156,8 +156,8 @@ def exp_simulation(net_id = 1, mode='test', exp='center_out'):
 if __name__ == "__main__":
 
     num_networks = 4 # Number of networks/subjects
-    mode = 'test'  # Set to 'train' to run the learning loop
-    exp = 'center_out'
+    mode = 'test'  # Set to 'train' to run the learning loop and 'test' to run the test loop
+    exp = 'vis_loc'
     # List of Expriments:
     # 1. center_out     (Exp2 Howard et al. 2013)
     # 2. mov_diff_loc   (Exp3 Howard et al. 2013)
@@ -167,4 +167,4 @@ if __name__ == "__main__":
     Parallel(n_jobs=num_networks)(
         delayed(exp_simulation)(net_id = i, mode=mode, exp=exp) for i in range(num_networks)
     )
-    print(f" The {mode} mode for experiment {exp} completed across {num_networks} networks.")
+    print(f"The {mode} mode for experiment {exp} completed across {num_networks} networks.")
