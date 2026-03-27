@@ -21,7 +21,7 @@ def plot_simulations(xy, target_xy, title = None):
     target_x = target_xy[:, -1, 0]
     target_y = target_xy[:, -1, 1]
 
-    fg = plt.figure(figsize=(10,4))
+    fg = plt.figure(figsize=(12,4))
     if title is not None:
       fg.suptitle(title, fontsize=16)
 
@@ -78,15 +78,22 @@ def plot_episode(task, batch,n_batch, interval,episode_data, title = None):
 
 
 
-def plot_motion(task, batch,episode_data):
+def plot_motion(batch,episode_data, title = None):
+    #def plot_motion(task, batch, episode_data, title=None):
     xy = episode_data['xy']
-    xy = task.shift_traj(xy)
+    #xy = task.shift_traj(xy)
     all_hidden = episode_data['hidden']
     all_muscle = episode_data['muscle']
     all_force = episode_data['force']
     all_actions = episode_data['actions']
+    all_targets = episode_data['targets']
+
     fg, ax = plt.subplots(nrows=2, ncols=3, figsize=(10, 7))
-    fg.suptitle(f'Batch {batch}', fontsize=16)
+    if title is None:
+        fg.suptitle(f'Batch {batch}', fontsize=16)
+    else:
+        fg.suptitle(title, fontsize=16)
+
     ind = 0
     ax[0, 0].plot(np.squeeze(xy.detach().cpu().numpy()[ind, :, 0]), label='x')
     ax[0, 0].plot(np.squeeze(xy.detach().cpu().numpy()[ind, :, 1]), label='y')
@@ -120,20 +127,23 @@ def plot_motion(task, batch,episode_data):
 
     plt.show()
 
+    plot_simulations(xy=xy.detach()[:, :, :2], target_xy=all_targets.detach(), title = title)
+
 
 
 # Plot endpoint and lateral deviation across training batches
-def plot_deviation(lateral_dev, endpoint_dev, title = None):
+def plot_deviation(lateral_dev, endpoint_dev, title = None, invert_vals = 'False'):
 
     endpoint_dev_np = np.array([x.detach().cpu().item() for x in endpoint_dev])
     lateral_dev_np = np.array([x.detach().cpu().item() for x in lateral_dev])
+    lateral_dev_np_signed = -lateral_dev_np if invert_vals else lateral_dev_np
 
     n_batch_endpoint = np.arange(len(endpoint_dev_np))
-    n_batch_lateral = np.arange(len(lateral_dev_np))
+    n_batch_lateral = np.arange(len(lateral_dev_np_signed))
 
     fig, axs = plt.subplots(2, 1, figsize=(10, 8))
 
-    axs[0].plot(n_batch_endpoint, endpoint_dev_np, label='Endpoint Deviation', color='blue')
+    axs[0].plot(n_batch_endpoint, lateral_dev_np_signed, label='Endpoint Deviation', color='blue')
     axs[0].set_ylabel("Endpoint Deviation")
     axs[0].set_title("Deviation Across Batches")
     axs[0].grid(True)
@@ -180,7 +190,7 @@ def plot_training_loss(losses, title = None):
     plt.show()
 
 
-def plot_subspace(data, t_before_go = 10, title = None):
+def plot_subspace_ind(data, t_before_go = 10, title = None):
 
     go_signal = data['inp'][:, :, 2]
     is_zero = (go_signal < 0.01)
@@ -195,11 +205,11 @@ def plot_subspace(data, t_before_go = 10, title = None):
 
     fg = plt.figure(figsize=(4, 4))
     if title is not None:
-      fg.suptitle(title, fontsize=12)
+      fg.suptitle(title, fontsize=8)
 
     plt.scatter(hidden_reduced[:, 0],hidden_reduced[:, 1], marker='o', s=30, color='C0')
 
-    n_targets = 8 #Should change the code so I can have access to the value in task
+    n_targets = 8
     for i in range(n_targets):
       plt.annotate(
         str(i + 1),
@@ -217,83 +227,81 @@ def plot_subspace(data, t_before_go = 10, title = None):
     plt.ylim(-0.5, 0.5)
     plt.show()
 
-def plot_subspace_all(saveLoc, t_before_go = 10, title = None):
-    phase_data_hidden_reduced={}
-    all_data_hidden_reduced= {}
+def plot_subspace_batch(data, batch_list, t_before_go = 10, title = None):
+
+    all_data_hidden_reduced = {}
     all_hidden = []
     all_hidden_reduced = []
 
 
-    phases = ['NF1', 'NF1', 'FF1', 'FF1','NF2','NF2']
-    k_values = [0,0,0,0,0,0]
-    directions = ['right','left','right','left','right','left']
-    # phases = ['FF1', 'FF1', 'FF1', 'FF1', 'NF2','NF2']
-    # k_values = [0,0,8,8,0,0]
-    # directions = ['right','left','right','left','right','left']
-    # directions = ['null']
+    for train_batch_number in batch_list:
+        data_temp = data[train_batch_number]
+        go_signal = data_temp['inp'][:, :, 2]
+        is_zero = (go_signal < 0.01)
+        indices = th.where(is_zero.any(dim=1), th.argmax(is_zero.int(), dim=1), go_signal.shape[1])
+        timepoints = indices - th.full((go_signal.shape[0],), t_before_go, dtype=th.int32)
+        batch_size = indices.shape[0]
+        batch_indices = th.arange(batch_size, dtype=th.int32)
+        all_hidden.append(data_temp['hidden'][batch_indices, timepoints, :])
 
     n_components = 3
     pca = PCA(n_components=n_components)
+    all_hidden_reduced = pca.fit_transform(np.squeeze(th.cat(all_hidden, dim=0).detach().cpu().numpy()))
+    print('Explained Variance = ', pca.explained_variance_ratio_)
 
+    colors = plt.cm.Blues(np.linspace(0.4, 0.9, len(batch_list)))
 
-    for (phase,k_value,direction) in zip(phases,k_values,directions):
-      data = th.load(saveLoc + f'data_{phase}_{int(k_value)}_{direction}_Exp7')
-
-      go_signal = data['inp'][:, :, 2]
-      is_zero = (go_signal < 0.01)
-      indices = th.where(is_zero.any(dim=1), th.argmax(is_zero.int(), dim=1), go_signal.shape[1])
-      timepoints = indices - th.full((go_signal.shape[0],), t_before_go, dtype=th.int32)
-      batch_size = indices.shape[0]
-      batch_indices = th.arange(batch_size, dtype=th.int32)
-      all_hidden.append(data['hidden'][batch_indices, timepoints, :])
-      phase_data_hidden_reduced[f'{phase}_{k_value}_{direction}'] = pca.fit_transform(np.squeeze(data['hidden'][batch_indices, timepoints, :].detach().cpu().numpy()))
-
-    all_hidden_reduced = pca.fit_transform(np.squeeze(th.cat(all_hidden, dim = 0).detach().cpu().numpy()))
-    test_data = np.squeeze(th.cat(all_hidden, dim = 0).detach().cpu().numpy())
-    print('Explained Variance = ',pca.explained_variance_ratio_)
-
-
-    fg, axes = plt.subplots(1,3,figsize=(15, 5))
+    fg, ax = plt.subplots(figsize=(6, 6), subplot_kw={'projection': '3d'})
     if title is not None:
-      fg.suptitle(title, fontsize=12)
-
-    ax1,ax2,ax3 = axes
-    n_targets = 8  # Should change the code so I can have access to the value in task
-
-    for i, (phase,k_value, direction) in enumerate(zip(phases,k_values,directions)):
-      all_data_hidden_reduced[f'{phase}_{k_value}_{direction}'] =  all_hidden_reduced[i*batch_size:(i+1)*batch_size, :]
-
-      ax1.scatter(all_data_hidden_reduced[f'{phase}_{k_value}_{direction}'][:, 0],all_data_hidden_reduced[f'{phase}_{k_value}_{direction}'][:, 1], marker='o', s=30, label = f'{phase}_{direction}')#f'{phase}_{k_value}_{direction}')
-
-      ax2.scatter(all_data_hidden_reduced[f'{phase}_{k_value}_{direction}'][:, 0], all_data_hidden_reduced[f'{phase}_{k_value}_{direction}'][:, 2], marker='o', s=30, label= f'{phase}_{direction}')#f'{phase}_{k_value}_{direction}')
-
-      ax3.scatter(all_data_hidden_reduced[f'{phase}_{k_value}_{direction}'][:, 1],all_data_hidden_reduced[f'{phase}_{k_value}_{direction}'][:, 2], marker='o', s=30,label= f'{phase}_{direction}')#f'{phase}_{k_value}_{direction}')
+        fg.suptitle(title, fontsize=8)
 
 
-      ax1.set_xlabel('Component 1')
-      ax1.set_ylabel('Component 2')
-      ax2.set_xlabel('Component 1')
-      ax2.set_ylabel('Component 3')
-      ax3.set_xlabel('Component 2')
-      ax3.set_ylabel('Component 3')
 
-      for ax in axes:
-        ax.set_xlim(-0.5, 0.5)
-        ax.set_ylim(-0.5, 0.5)
-        ax.legend(loc='upper right', fontsize=8)
 
-    plt.tight_layout()
+    for i in range(len(batch_list)):
+        plot_data = all_hidden_reduced[i * batch_size:(i + 1) * batch_size, :]
+        all_data_hidden_reduced[f'training_batch_{batch_list[i]}'] = plot_data
+        ax.scatter(plot_data[:, 0], plot_data[:, 1], plot_data[:,2], marker='o', s=20, color=colors[i],label=f'Batch {batch_list[i]}')
+
+
+    ax.set_xlabel('Component 1')
+    ax.set_ylabel('Component 2')
+    ax.set_zlabel('Component 3')
+    ax.set_xlim(-0.5, 0.5)
+    ax.set_ylim(-0.5, 0.5)
+    ax.set_zlim(-0.5, 0.5)
+    #ax.legend(loc='upper left')
     plt.show()
 
 
 
-
 if __name__ == "__main__":
-    saveLoc = '/Users/pounemirzazadeh/Motornet/Modular'
+    saveLoc = '/Users/pounemirzazadeh/Motornet/MultiNet/Modular_version/new_test'
+    exp_names = ['center_out', 'mov_diff_loc', 'pro_loc', 'vis_loc']
+    phases = ['NF1', 'FF1', 'NF2']
+    force_fields = ['CW', 'CCW']
+    num_nets = 1
 
-    # results = th.load(saveLoc + 'results')
-    # for phase, data in results.items():
-    #   plot_deviation(data['lateral_dev'], data['endpoint_dev'], title=f"Deviation - {phase}")
-    #   plot_training_loss(data['losses'], title=f"Loss - {phase}")
 
-    plot_subspace_all(saveLoc = saveLoc)
+
+    for net_id in range(num_nets):
+        for exp in exp_names:
+            path_result = os.path.join(saveLoc, f"task_{net_id}", f"results_{exp}")
+            results = th.load(path_result)
+            for phase, data in results.items():
+                plot_deviation(data['lateral_dev'], data['endpoint_dev'], title=f"Deviation, Network = {net_id}, Exp = {exp}, Phase = {phase}")
+                plot_training_loss(data['losses'], title=f"Loss, Network = {net_id}, Exp = {exp}, Phase = {phase}")
+            for force_field in force_fields:
+                path_test = os.path.join(saveLoc, f"task_{net_id}", f"test_data_{exp}_{force_field}")
+                print(path_test)
+                test_data = th.load(path_test)
+                for phase in phases:
+                    last_batch = list(test_data[phase])[-1]
+                    first_batch = list(test_data[phase])[0]
+                    # plot_subspace_ind(data = test_data[phase][last_batch], t_before_go=10, title=f"Activity, Network = {net_id}, Exp = {exp}, Phase = {phase}, Force_Field = {force_field}")
+                    plot_subspace_batch(data=test_data[phase], batch_list = list(test_data[phase]), t_before_go=10,
+                                title=f"Activity, Network = {net_id}, Exp = {exp}, Phase = {phase}, Force_Field = {force_field}")
+                    plot_motion(batch = first_batch, episode_data = test_data[phase][first_batch],
+                                title=f"Network = {net_id}, Exp = {exp}, Phase = {phase}, Force_Field = {force_field}, batch = {first_batch}")
+                    plot_motion(batch=last_batch, episode_data=test_data[phase][last_batch],
+                                title=f"Network = {net_id}, Exp = {exp}, Phase = {phase}, Force_Field = {force_field}, batch = {last_batch}")
