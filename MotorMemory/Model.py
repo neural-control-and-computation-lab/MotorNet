@@ -51,6 +51,7 @@ def run_episode(env, task, policy, batch_size, n_t, device, force_field = 'null'
     all_joint = []
 
 
+
     while not terminated:  # will run until `max_ep_duration` is reached
         t_step = int(env.elapsed / env.dt)
         obs = task.shift_obs(obs) # This line added for Exp 8
@@ -74,6 +75,8 @@ def run_episode(env, task, policy, batch_size, n_t, device, force_field = 'null'
         all_vis_inp.append(obs[:, None, :2])
         all_joint.append(info['states']['joint'][:, None, :])
 
+    ext_force = force_dir
+
     return {
         'xy': th.cat(xy, dim=1),
         'hidden' : th.cat(all_hidden, dim=1),
@@ -83,7 +86,8 @@ def run_episode(env, task, policy, batch_size, n_t, device, force_field = 'null'
         'targets' : th.cat(all_targets, dim=1),
         'inp' : th.cat(all_inp, dim=1),
         'vis_inp' : th.cat(all_vis_inp, dim=1),
-        'joint' : th.cat(all_joint, dim=1)
+        'joint' : th.cat(all_joint, dim=1),
+        'ext_force' : ext_force
     }
 
 
@@ -133,7 +137,7 @@ def calculate_deviations(task, episode_data, n_t, eps = 1e-6):
 
 
 # Run multiple training batches and optimize the policy.
-def run_batches(env, task, policy, optimizer, n_batches, batch_size, interval, ep_dur, device, run_mode, simulation_mode, force_field, contextual_cue, *args, **kwargs ):
+def train_batches(env, task, policy, optimizer, n_batches, batch_size, interval, ep_dur, device, run_mode, force_field, contextual_cue, *args, **kwargs ):
 
     total_losses = []
     cartesian_losses = []
@@ -162,19 +166,16 @@ def run_batches(env, task, policy, optimizer, n_batches, batch_size, interval, e
         lateral_dev.append(lat_dev)
         endpoint_dev.append(end_dev)
 
-        if simulation_mode == 'train':
-            # backward pass & update weights
-            loss_dict['total'].backward()
-            th.nn.utils.clip_grad_norm_(policy.parameters(),
-                                        max_norm=1)  # important to make sure gradients don't get crazy
-            optimizer.step()
-            optimizer.zero_grad()
-
-        # Optional visualization
-        # plot_episode(task, batch, n_batches, interval, episode_data)
-
-        if batch % interval == 0 or batch == n_batches - 1:
+        # Save the weights before updating them.
+        if batch % interval == 0 or batch == 1 or batch == n_batches - 1:
             weight_dic[f'{batch}'] = copy.deepcopy(policy.state_dict())
+
+        # backward pass & update weights
+        loss_dict['total'].backward()
+        th.nn.utils.clip_grad_norm_(policy.parameters(),max_norm=1)  # important to make sure gradients don't get crazy
+        optimizer.step()
+        optimizer.zero_grad()
+
 
     return {'total' : total_losses, 'cartesian': cartesian_losses, 'muscle': muscle_losses, 'spectral': spectral_losses,
             'jerk': jerk_losses}, endpoint_dev, lateral_dev, weight_dic
@@ -186,8 +187,6 @@ def test_batches(env , task, policy, n_batches, batch_size, interval, ep_dur, de
     n_t = int(ep_dur / env.effector.dt) + 1
     for batch in range(n_batches):
         episode_data = run_episode(env = env, task = task, policy = policy, batch_size = batch_size, n_t = n_t, device = device, *args, **kwargs)
-        title =  kwargs.get('title', None)
-        # plot_episode(task, batch, n_batches, interval, episode_data, title=title)
 
     return episode_data
 
