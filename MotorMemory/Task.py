@@ -144,6 +144,7 @@ class ExpTask:
         shifted_base_joint = self.effector.cartesian2joint(shifted_cartesian).cpu().numpy().reshape(-1)
 
         return shifted_base_joint
+
     def shift_obs(self, obs):
         if self.shift:
             obs[:,:2] = obs[:,:2] - self.movement_array[:2]
