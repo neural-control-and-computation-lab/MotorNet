@@ -9,9 +9,11 @@ phases = ['NF1','FF1','NF2']
 measures = ['endpoint', 'lateral']
 num_nets = 4
 
+
 training_sets = {
-    "set1": "/Users/pounemirzazadeh/Motornet/MultiNet/Modular_version",
-    "set2": "/Users/pounemirzazadeh/Motornet/MultiNet/Modular_version/Second_training/"}
+    "set1": "/Users/pounemirzazadeh/Motornet/MultiNet/Modular_version/new_test",
+}
+
 
 purtb_group = {
     "CW":  {"suffix": "CW", "invert": False, "cmap": plt.cm.Greens},
