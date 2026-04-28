@@ -7,7 +7,7 @@ def policy_mod(phase):
         input_freeze = 0
         output_freeze = 0
         optimizer_mod = 'Adam'
-        learning_rate = 1e-4 #1e-3
+        learning_rate = 1e-3 #1e-3
 # In other phases: freeze both input and output connections
     else:
         input_freeze = 1
@@ -15,7 +15,7 @@ def policy_mod(phase):
         # optimizer_mod = 'SGD'
         # learning_rate = 1e-5
         optimizer_mod = 'Adam'
-        learning_rate = 1e-4#1e-3
+        learning_rate = 1e-3#1e-3
 
     return input_freeze, output_freeze, optimizer_mod, learning_rate
 
@@ -25,8 +25,10 @@ def applied_load(endpoint_vel, k, mode = 'CW'):
     # Curved Force
     if mode == 'CW':
         curl_matrix = th.tensor([[0., -1.], [1., 0.]])  # Clockwise
-    else:
+    elif mode == 'CCW':
         curl_matrix = th.tensor([[0., 1.], [-1., 0.]])   # Counterclockwise
+    else:
+        curl_matrix = th.tensor([[0., 0.], [0., 0.]])
     force_field = k * endpoint_vel @ curl_matrix
 
     return force_field
@@ -89,7 +91,7 @@ def compare_weights(state1, state2):
 
 
 if __name__ == "__main__":
-    saveLoc = '/Users/pounemirzazadeh/Motornet/MultiNet/Modular_version/new_test/task_0/'
+    saveLoc = '/Users/pounemirzazadeh/Motornet/MultiNet/Modular_version/task_0/'
     # Compare weights between the following two phases. This is especially useful to verify that freezing worked as expected
     phase1 = 'FF1'
     exp1 = 'center_out'
