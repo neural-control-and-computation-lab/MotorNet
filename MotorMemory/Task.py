@@ -25,7 +25,8 @@ class ExpTask:
         base_joint = np.deg2rad([40., 110., 0., 0.]).astype(np.float32) # Original values: [60., 80., 0., 0.]
         # Circular targets for center out experiments
         circular_offset = generate_circular_targets(target_num = self.circular_target_num, radius = 0.1)
-
+        self.shift = False
+        self.movement_array = th.zeros(4)
         # test conditions
         if self.run_mode == 'test_rand': # starting points and targets are generated randomly
             catch_chance = 0.
@@ -134,20 +135,23 @@ class ExpTask:
 
     def shift_joints(self, base_joint, shift_array= [0.1, 0, 0, 0]):
         base_cartesian = self.effector.joint2cartesian(th.tensor(base_joint, dtype=th.float32))
+        shift_tensor = th.tensor([0.1, 0, 0, 0], dtype=th.float32)
         if self.cue == 'right':
+            shifted_cartesian = base_cartesian + shift_tensor
             self.movement_array = th.tensor(shift_array, dtype=th.float32)
         elif self.cue == 'left':
-            self.movement_array = th.tensor(-1 * shift_array, dtype=th.float32)
+            shifted_cartesian = base_cartesian - shift_tensor
+            self.movement_array = -1 * th.tensor(shift_array, dtype=th.float32)
         else:
-            self.movement_array = th.tensor([0, 0, 0, 0], dtype=th.float32)
-        shifted_cartesian = base_cartesian + self.movement_array
+            shifted_cartesian = base_cartesian + th.tensor([0, 0, 0, 0], dtype=th.float32)
+
         shifted_base_joint = self.effector.cartesian2joint(shifted_cartesian).cpu().numpy().reshape(-1)
 
         return shifted_base_joint
 
     def shift_obs(self, obs):
         if self.shift:
-            obs[:,:2] = obs[:,:2] - self.movement_array[:2]
+            obs = th.cat([obs[:,:2] - self.movement_array[:2], obs[:,2:]], dim=1)
         return obs
 
     def shift_traj(self, xy):
