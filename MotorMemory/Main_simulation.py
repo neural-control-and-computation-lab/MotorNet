@@ -2,6 +2,7 @@ import sys
 import os
 import torch as th
 import motornet as mn
+import copy
 
 # Get the directory
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -30,6 +31,8 @@ class ExpConfig:
             self._setup_baseline()
         elif self.mode == 'train':
             self._setup_training()
+        elif self.mode == 'baseline_test':
+            self._setup_baseline_testing()
         else:
             self._setup_testing()
 
@@ -37,28 +40,40 @@ class ExpConfig:
         self.batch_size = 32
         self.phases = ['growing_up']
         self.k_values = [0]
-        self.n_batches = [1000]
+        self.n_batches = [2000]
         self.load_baseline = [False]
         self.run_modes = ["train_rand"]
         self.exp_save_names = ["baseline"]
 
+    def _setup_baseline_testing(self):
+        self.batch_size = 128
+        self.phases = ['growing_up']
+        self.k_values = [0]
+        self.n_batches = [1]
+        self.run_modes = ["test_rand"]
+        self.exp_save_names = ["baseline"]
+        self.contextual_cues = ['null']
+        self.force_fields = ['null']
+
     def _setup_training(self):
         self.batch_size = 32
         self.phases = ['NF1', 'FF1', 'NF2']
-        self.k_values = [0,8,0]
-        self.n_batches = [700,200,100]
+        self.k_values = [0,12,0]
+        self.n_batches = [200,70,50]#[700,70,50]
         self.load_baseline = [True, False, False]   # This is useful for the phases needing growing up weights
-        self.run_modes = [f"{mode}_{self.exp}"]*3
+        self.run_modes = [f"{self.mode}_{self.exp}"]*3
         self.exp_save_names = [f"{self.exp}"]*3
+
 
     def _setup_testing(self):
         self.batch_size = 128
         self.phases = ['NF1', 'FF1', 'NF2']
-        self.k_values = [0, 8, 0] #!
+        self.k_values = [0, 12, 0]
         self.n_batches = [1, 1, 1]
-        self.run_modes = f"{mode}_{self.exp}"
+        self.run_modes = [f"{self.mode}_{self.exp}"]*3
         self.contextual_cues = ['left','right']
         self.force_fields = ['CCW','CW']
+
 
 
 def create_setup(cfg):
@@ -72,7 +87,7 @@ def create_setup(cfg):
 
 
 def run_training(env, task, cfg):
-    n_t = int(cfg.ep_dur / env.effector.dt)
+    n_t = int(cfg.ep_dur / env.effector.dt) + 1 # Why + 1 (I added recently)
     inputs, targets, init_states = task.generate(1, n_t)
     results = {}
 
@@ -99,7 +114,7 @@ def run_training(env, task, cfg):
 
         force_field = 'random' if phase == 'FF1' else 'null'
         contextual_cue = 'random' if phase in ['NF1', 'NF2'] else 'force_dependent'
-        interval = 100 if phase == 'growing_up' else 50 if phase == 'NF1' else 10
+        interval = 100 if phase == 'growing_up' else 50 if phase == 'NF1' else 5
 
         losses, endpoint_dev, lateral_dev, weights = train_batches(
             env=env, task=task, policy=policy, optimizer=optimizer, n_batches=n_batch,
@@ -112,11 +127,6 @@ def run_training(env, task, cfg):
             'endpoint_dev': endpoint_dev,
             'lateral_dev': lateral_dev
         }
-        if phase == 'growing_up':
-            th.save(results, cfg.saveLoc + f"results_baseline")
-            results = {}
-        else:
-            pass
 
 
         th.save(weights, cfg.saveLoc + f'weightsDic_{cfg.phases[i]}_{cfg.exp_save_names[i]}')
@@ -131,7 +141,7 @@ def run_testing(env, task, cfg):
     test_data = {}
     deviations = {}
     for force_field,contextual_cue in zip(cfg.force_fields, cfg.contextual_cues):
-        for i, phase in enumerate(cfg.phases):
+        for i, (phase, k_value, n_batch, run_mode) in enumerate(zip(cfg.phases, cfg.k_values, cfg.n_batches, cfg.run_modes)):
             test_data[phase] = {}
             deviations[phase] = {}
             input_freeze, output_freeze, optimizer_mod, learning_rate = policy_mod(phase='growing_up')
@@ -142,15 +152,13 @@ def run_testing(env, task, cfg):
                 deviations[phase][batch_number] = {}
                 policy.load_state_dict(weights[batch_number])
 
-                testdata = test_batches(env=env, task=task, policy=policy, n_batches=1, batch_size=cfg.batch_size, interval=1,
-                                        ep_dur=cfg.ep_dur, device=cfg.device, run_mode=cfg.run_modes,
+                testdata, endpoint_dev, lateral_dev = test_batches(env=env, task=task, policy=policy, n_batches=n_batch, batch_size=cfg.batch_size, interval=1,
+                                        ep_dur=cfg.ep_dur, device=cfg.device, run_mode=run_mode,
                                         simulation_mode=cfg.mode, force_field=force_field, contextual_cue=contextual_cue,
-                                        k=cfg.k_values[i], title=f'{cfg.exp} - {phase} - {cfg.net_id} - batch = {batch_number}')
-
-                lat_dev, end_dev = calculate_deviations(task, testdata, n_t, eps=1e-6)
+                                        k=k_value, title=f'{cfg.exp} - {phase} - {cfg.net_id} - batch = {batch_number}')
                 test_data[phase][batch_number] = testdata
-                deviations[phase][batch_number]['lateral'] = lat_dev
-                deviations[phase][batch_number]['endpoint'] = end_dev
+                deviations[phase][batch_number]['lateral'] = lateral_dev
+                deviations[phase][batch_number]['endpoint'] = endpoint_dev
 
         th.save(test_data, cfg.saveLoc + f"test_data_{cfg.exp}_{force_field}")
         th.save(deviations, cfg.saveLoc + f"deviations_{cfg.exp}_{force_field}")
@@ -165,21 +173,16 @@ def exp_simulation(net_id = 1, mode='test', exp='center_out'):
 
     if mode == 'train' or mode == 'baseline':
         run_training(env = env, task = task, cfg = cfg)
-    elif mode == 'test':
+    elif mode == 'test' or mode == 'baseline_test':
         run_testing(env = env, task = task, cfg = cfg)
 
 
 if __name__ == "__main__":
 
     num_networks = 4 # Number of networks/subjects
-    mode = 'test'  # Set to 'train' to run the learning loop and 'test' to run the test loop
+    mode = ('test')  # Set to 'train' to run the learning loop and 'test' to run the test loop
     experiments = ['center_out','mov_diff_loc', 'pro_loc','vis_loc']
 
-    # List of Experiments:
-    # 1. center_out     (Exp2 Howard et al. 2013)
-    # 2. mov_diff_loc   (Exp3 Howard et al. 2013)
-    # 3. pro_loc        (Exp8 Howard et al. 2013)
-    # 4. vis_loc        (Exp7 Howard et al. 2013)
 
     if mode == 'train':
         Parallel(n_jobs=num_networks)(
