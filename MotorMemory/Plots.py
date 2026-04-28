@@ -46,11 +46,11 @@ def plot_simulations(xy, target_xy, title = None):
 
 
 # Plot neural activity, muscle activity, inputs, targets and trajectory for a given episode
-def plot_episode(task, batch,n_batch, interval,episode_data, title = None):
+def plot_episode(batch,n_batch, interval,episode_data, title = None):
     xy = episode_data['xy']
     obs = episode_data['vis_inp']
     fingertip = episode_data['xy']
-    xy = task.shift_traj(xy)
+    xy_traj = episode_data['traj']
     all_targets = episode_data['targets']
     all_hidden = episode_data['hidden']
     all_muscle = episode_data['muscle']
@@ -79,9 +79,8 @@ def plot_episode(task, batch,n_batch, interval,episode_data, title = None):
 
 
 def plot_motion(batch,episode_data, title = None):
-    #def plot_motion(task, batch, episode_data, title=None):
     xy = episode_data['xy']
-    #xy = task.shift_traj(xy)
+    xy_traj = episode_data['traj']
     all_hidden = episode_data['hidden']
     all_muscle = episode_data['muscle']
     all_force = episode_data['force']
@@ -132,18 +131,21 @@ def plot_motion(batch,episode_data, title = None):
 
 
 # Plot endpoint and lateral deviation across training batches
-def plot_deviation(lateral_dev, endpoint_dev, title = None, invert_vals = 'False'):
+def plot_deviation(lateral_dev, endpoint_dev, title = None, batch_values = None):
 
     endpoint_dev_np = np.array([x.detach().cpu().item() for x in endpoint_dev])
     lateral_dev_np = np.array([x.detach().cpu().item() for x in lateral_dev])
-    lateral_dev_np_signed = -lateral_dev_np if invert_vals else lateral_dev_np
 
-    n_batch_endpoint = np.arange(len(endpoint_dev_np))
-    n_batch_lateral = np.arange(len(lateral_dev_np_signed))
+    if batch_values is not None:
+        n_batch_endpoint = np.array(batch_values)
+        n_batch_lateral = np.array(batch_values)
+    else:
+        n_batch_endpoint = np.arange(len(endpoint_dev_np))
+        n_batch_lateral = np.arange(len(lateral_dev_np))
 
     fig, axs = plt.subplots(2, 1, figsize=(10, 8))
 
-    axs[0].plot(n_batch_endpoint, lateral_dev_np_signed, label='Endpoint Deviation', color='blue')
+    axs[0].plot(n_batch_endpoint, endpoint_dev_np, label='Endpoint Deviation', color='blue')
     axs[0].set_ylabel("Endpoint Deviation")
     axs[0].set_title("Deviation Across Batches")
     axs[0].grid(True)
@@ -231,6 +233,7 @@ def plot_subspace_batch(data, batch_list, t_before_go = 10, title = None):
 
     all_data_hidden_reduced = {}
     all_hidden = []
+    all_batch_size = []
     all_hidden_reduced = []
 
 
@@ -241,6 +244,7 @@ def plot_subspace_batch(data, batch_list, t_before_go = 10, title = None):
         indices = th.where(is_zero.any(dim=1), th.argmax(is_zero.int(), dim=1), go_signal.shape[1])
         timepoints = indices - th.full((go_signal.shape[0],), t_before_go, dtype=th.int32)
         batch_size = indices.shape[0]
+        all_batch_size.append(batch_size)
         batch_indices = th.arange(batch_size, dtype=th.int32)
         all_hidden.append(data_temp['hidden'][batch_indices, timepoints, :])
 
@@ -259,7 +263,7 @@ def plot_subspace_batch(data, batch_list, t_before_go = 10, title = None):
 
 
     for i in range(len(batch_list)):
-        plot_data = all_hidden_reduced[i * batch_size:(i + 1) * batch_size, :]
+        plot_data = all_hidden_reduced[i * all_batch_size[i]:(i + 1) * all_batch_size[i], :]
         all_data_hidden_reduced[f'training_batch_{batch_list[i]}'] = plot_data
         ax.scatter(plot_data[:, 0], plot_data[:, 1], plot_data[:,2], marker='o', s=20, color=colors[i],label=f'Batch {batch_list[i]}')
 
@@ -276,31 +280,42 @@ def plot_subspace_batch(data, batch_list, t_before_go = 10, title = None):
 
 
 if __name__ == "__main__":
-    saveLoc = '/Users/pounemirzazadeh/Motornet/MultiNet/Modular_version/new_test'
+    saveLoc = '/Users/pounemirzazadeh/Motornet/MultiNet/Modular_version'
+
     exp_names = ['center_out', 'mov_diff_loc', 'pro_loc', 'vis_loc']
     phases = ['NF1', 'FF1', 'NF2']
-    force_fields = ['CW', 'CCW']
-    num_nets = 1
+    force_fields = ['CW']
+
+
+    num_nets = 4
 
 
 
     for net_id in range(num_nets):
         for exp in exp_names:
             path_result = os.path.join(saveLoc, f"task_{net_id}", f"results_{exp}")
+            print(path_result)
             results = th.load(path_result)
             for phase, data in results.items():
-                plot_deviation(data['lateral_dev'], data['endpoint_dev'], title=f"Deviation, Network = {net_id}, Exp = {exp}, Phase = {phase}")
+                plot_deviation(data['lateral_dev'], data['endpoint_dev'], title=f"Training Deviation, Network = {net_id}, Exp = {exp}, Phase = {phase}")
                 plot_training_loss(data['losses'], title=f"Loss, Network = {net_id}, Exp = {exp}, Phase = {phase}")
             for force_field in force_fields:
                 path_test = os.path.join(saveLoc, f"task_{net_id}", f"test_data_{exp}_{force_field}")
-                print(path_test)
+                path_dev = os.path.join(saveLoc, f"task_{net_id}", f"deviations_{exp}_{force_field}")
                 test_data = th.load(path_test)
+                dev_data = th.load(path_dev)
                 for phase in phases:
                     last_batch = list(test_data[phase])[-1]
                     first_batch = list(test_data[phase])[0]
-                    # plot_subspace_ind(data = test_data[phase][last_batch], t_before_go=10, title=f"Activity, Network = {net_id}, Exp = {exp}, Phase = {phase}, Force_Field = {force_field}")
+                    lateral_list = [th.tensor(dev_data[phase][b]['lateral']) for b in sorted(dev_data[phase].keys())]
+                    endpoint_list = [th.tensor(dev_data[phase][b]['endpoint']) for b in sorted(dev_data[phase].keys())]
+                    lateral_tensor = th.cat(lateral_list).flatten()
+                    endpoint_tensor = th.cat(lateral_list).flatten()
+                    batch_list = sorted(list(dev_data[phase].keys()))
+                    plot_subspace_ind(data = test_data[phase][last_batch], t_before_go=10, title=f"Activity, Network = {net_id}, Exp = {exp}, Phase = {phase}, Force_Field = {force_field}")
                     plot_subspace_batch(data=test_data[phase], batch_list = list(test_data[phase]), t_before_go=10,
                                 title=f"Activity, Network = {net_id}, Exp = {exp}, Phase = {phase}, Force_Field = {force_field}")
+                    plot_deviation(lateral_tensor, endpoint_tensor, title=f"Test Deviation, Network = {net_id}, Exp = {exp}, Phase = {phase}", batch_values=batch_list)
                     plot_motion(batch = first_batch, episode_data = test_data[phase][first_batch],
                                 title=f"Network = {net_id}, Exp = {exp}, Phase = {phase}, Force_Field = {force_field}, batch = {first_batch}")
                     plot_motion(batch=last_batch, episode_data=test_data[phase][last_batch],
