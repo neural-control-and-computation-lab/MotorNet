@@ -310,7 +310,7 @@ if __name__ == "__main__":
                     lateral_list = [th.tensor(dev_data[phase][b]['lateral']) for b in sorted(dev_data[phase].keys())]
                     endpoint_list = [th.tensor(dev_data[phase][b]['endpoint']) for b in sorted(dev_data[phase].keys())]
                     lateral_tensor = th.cat(lateral_list).flatten()
-                    endpoint_tensor = th.cat(lateral_list).flatten()
+                    endpoint_tensor = th.cat(endpoint_list).flatten()
                     batch_list = sorted(list(dev_data[phase].keys()))
                     plot_subspace_ind(data = test_data[phase][last_batch], t_before_go=10, title=f"Activity, Network = {net_id}, Exp = {exp}, Phase = {phase}, Force_Field = {force_field}")
                     plot_subspace_batch(data=test_data[phase], batch_list = list(test_data[phase]), t_before_go=10,
