@@ -7,7 +7,7 @@ from collections import defaultdict
 exp_names = ['center_out','mov_diff_loc','pro_loc','vis_loc']
 phases = ['NF1','FF1','NF2']
 measures = ['endpoint', 'lateral']
-num_nets = 4
+num_nets = 12
 
 
 training_sets = {
@@ -35,8 +35,7 @@ def summarize_deviations(base_path, suffix, invert_vals):
 
                     batch_dict = dev_data[phase]
                     for batch_id, value in batch_dict.items():
-                        val = value[measure].detach().cpu()
-                        collected[batch_id].append(-val if invert_vals else val)
+                        collected[batch_id].append(th.tensor(value[measure]))
 
                 for batch_id, task_values in collected.items():
                     stacked = th.stack(task_values, dim=0)
@@ -59,6 +58,10 @@ all_data = {s_name: {d_name: summarize_deviations(path, param["suffix"], param["
 total_curves = num_nets * len(training_sets)
 colors_CW = plt.cm.Greens(np.linspace(0.4, 0.9, total_curves))
 colors_CCW = plt.cm.Reds(np.linspace(0.4, 0.9, total_curves))
+
+mean_summary = {exp: {p: [] for p in phases} for exp in exp_names}
+std_summary = {exp: {p: [] for p in phases} for exp in exp_names}
+batch_summary = {exp: {p: [] for p in phases} for exp in exp_names}
 
 for exp in exp_names:
     fig, axs = plt.subplots(1, 3, figsize=(18, 6), sharey=True)
@@ -89,6 +92,10 @@ for exp in exp_names:
             means.append(all_points_in_batch.mean().item())
             stds.append(all_points_in_batch.std().item())
 
+        mean_summary[exp][phase] = means
+        std_summary[exp][phase] = stds
+        batch_summary[exp][phase] = sorted_batches
+
         means = np.array(means)
         stds = np.array(stds)
 
@@ -98,6 +105,7 @@ for exp in exp_names:
 
         ax.set_title(f"Phase: {phase}")
         ax.grid(True, alpha=0.3)
+        ax.set_ylim(-0.07, 0.07)
         if i == 0: ax.set_ylabel("Lateral Deviation")
 
     plt.suptitle(exp)
@@ -113,6 +121,34 @@ plot_table = {
     'pro_loc': {'num': '8', 'color': 'green'},
     'mov_diff_loc': {'num': '3', 'color': 'red'}
 }
+
+
+fig, axs = plt.subplots(1, 3, figsize=(18, 6), sharey=True)  # 3 subplots, same y-axis
+
+for i, phase in enumerate(phases):
+    ax = axs[i]
+
+    for j, exp in enumerate(exp_names):
+        # get mean endpoint deviation for this experiment & phase
+        mean_values = mean_summary[exp][phase]
+        batch_values = batch_summary[exp][phase]
+
+        ax.plot(batch_values, mean_values, label=exp, color=plot_table[exp]['color'])
+
+    ax.set_title(f"Phase: {phase}")
+    ax.set_xlabel("Batch")
+    if i == 0:
+        ax.set_ylabel("Lateral Deviation")
+    ax.grid(True)
+    ax.set_ylim(-0.07, 0.07)
+    ax.legend()
+
+plt.tight_layout()
+plt.show()
+
+
+
+
 
 plot_phases = [('FF1', -1), ('NF2', 0)]  #(Phase name, batch index)
 
@@ -140,7 +176,7 @@ for i, (phase_name, b_idx) in enumerate(plot_phases):
     ax.set_xticklabels([v['num'] for v in plot_table.values()])
     ax.set_title(f"{phase_name}")
     ax.grid(True, axis='y', alpha=0.3)
-    ax.set_ylim(-0.04, 0.04)
+    ax.set_ylim(-0.05, 0.05)
 
 axs[0].legend(loc='upper left')
 plt.tight_layout()
