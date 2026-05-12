@@ -2,3 +2,22 @@ tasklocal.py
 N/*
 notebooks/
 .idea/*
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors / tools
+.vscode/
+.claude/
+
+# Run artifacts
+*.log
