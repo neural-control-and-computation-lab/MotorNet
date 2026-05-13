@@ -165,8 +165,10 @@ def train_batches(env, task, policy, optimizer, n_batches, batch_size, interval,
             lat_dev = - lat_dev
         else:
             lat_dev = lat_dev
-        lateral_dev.append(lat_dev)
-        endpoint_dev.append(end_dev)
+        # Detach: lat_dev/end_dev carry grad_fn from episode_data's autograd graph; appending
+        # the live tensors to a list across batches pins the per-episode graph and leaks memory.
+        lateral_dev.append(lat_dev.detach())
+        endpoint_dev.append(end_dev.detach())
 
         # Save the weights before updating them.
         if batch % interval == 0  or batch == n_batches - 1:

@@ -40,7 +40,7 @@ class ExpConfig:
         self.batch_size = 32
         self.phases = ['growing_up']
         self.k_values = [0]
-        self.n_batches = [2000]
+        self.n_batches = [5000]
         self.load_baseline = [False]
         self.run_modes = ["train_rand"]
         self.exp_save_names = ["baseline"]
@@ -59,7 +59,7 @@ class ExpConfig:
         self.batch_size = 32
         self.phases = ['NF1', 'FF1', 'NF2']
         self.k_values = [0,12,0]
-        self.n_batches = [200,70,50]#[700,70,50]
+        self.n_batches = [500,100,50]#[700,70,50]
         self.load_baseline = [True, False, False]   # This is useful for the phases needing growing up weights
         self.run_modes = [f"{self.mode}_{self.exp}"]*3
         self.exp_save_names = [f"{self.exp}"]*3
@@ -106,11 +106,15 @@ def run_training(env, task, cfg):
                 policy.load_state_dict(weightsDic[next(reversed(weightsDic))])
 
                 policy.freeze(input_freeze=input_freeze, output_freeze=output_freeze)
+                prev_opt_path = cfg.saveLoc + 'optStateDic_growing_up_baseline'
             else:
                 weightsDic = th.load(cfg.saveLoc + f'weightsDic_{cfg.phases[i-1]}_{cfg.exp_save_names[i-1]}')
                 policy.load_state_dict(weightsDic[next(reversed(weightsDic))])
                 policy.freeze(input_freeze=input_freeze, output_freeze=output_freeze)
-                pass
+                prev_opt_path = cfg.saveLoc + f'optStateDic_{cfg.phases[i-1]}_{cfg.exp_save_names[i-1]}'
+            # Carry Adam's m/v across phase boundaries to avoid the lr*sign(g) first-step blow-up.
+            if os.path.exists(prev_opt_path):
+                optimizer.load_state_dict(th.load(prev_opt_path))
 
         force_field = 'random' if phase == 'FF1' else 'null'
         contextual_cue = 'random' if phase in ['NF1', 'NF2'] else 'force_dependent'
@@ -130,6 +134,8 @@ def run_training(env, task, cfg):
 
 
         th.save(weights, cfg.saveLoc + f'weightsDic_{cfg.phases[i]}_{cfg.exp_save_names[i]}')
+        # Persist Adam moments so the next phase can resume without a fresh-optimizer first-step jump.
+        th.save(optimizer.state_dict(), cfg.saveLoc + f'optStateDic_{cfg.phases[i]}_{cfg.exp_save_names[i]}')
 
     th.save(results, cfg.saveLoc + f"results_{cfg.exp}")
 

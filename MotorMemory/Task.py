@@ -145,7 +145,15 @@ class ExpTask:
         else:
             shifted_cartesian = base_cartesian + th.tensor([0, 0, 0, 0], dtype=th.float32)
 
-        shifted_base_joint = self.effector.cartesian2joint(shifted_cartesian).cpu().numpy().reshape(-1)
+        # Analytic 2-link inverse kinematics (elbow-up). The effector lacks cartesian2joint,
+        # so do it inline using the skeleton's link lengths.
+        L1, L2 = self.effector.skeleton.L1, self.effector.skeleton.L2
+        x, y = shifted_cartesian[..., 0], shifted_cartesian[..., 1]
+        c2 = th.clamp((x * x + y * y - L1 * L1 - L2 * L2) / (2 * L1 * L2), -1.0, 1.0)
+        theta2 = th.acos(c2)
+        theta1 = th.atan2(y, x) - th.atan2(L2 * th.sin(theta2), L1 + L2 * th.cos(theta2))
+        zeros = th.zeros_like(theta1)
+        shifted_base_joint = th.stack([theta1, theta2, zeros, zeros], dim=-1).cpu().numpy().reshape(-1)
 
         return shifted_base_joint
 
