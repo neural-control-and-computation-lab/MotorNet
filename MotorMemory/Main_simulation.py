@@ -80,7 +80,7 @@ def create_setup(cfg):
     mm = mn.muscle.RigidTendonHillMuscle()
     ee = mn.effector.RigidTendonArm26(muscle=mm, timestep=cfg.dt)
     env = Env.ExpTaskEnv(max_ep_duration=cfg.ep_dur, effector=ee, proprioception_delay=0.01, vision_delay=0.07,
-                         proprioception_noise=1e-3, vision_noise=1e-3, action_noise=1e-4)
+                         proprioception_noise=1e-4, vision_noise=1e-3, action_noise=1e-4)
     obs, info = env.reset()
     task = Task.ExpTask(effector=ee)
     return env, task

@@ -101,6 +101,16 @@ class ExpTask:
             init_states = self.effector.draw_random_uniform_states(batch_size).detach().cpu().numpy() # random initial state
             start_states = init_states
             self.exp_type = 'random_target'
+            # Per-TRIAL random visual offsets so each trial in a batch independently
+            # gets its own shift (or no shift). Forces the network to keep cue-detection
+            # circuits trial-local rather than batch-level.
+            p_shift = 0.5
+            has_shift = (np.random.rand(batch_size) < p_shift).astype(np.float32)
+            sx = np.random.uniform(-0.1, 0.1, size=batch_size).astype(np.float32) * has_shift
+            sy = np.random.uniform(-0.05, 0.05, size=batch_size).astype(np.float32) * has_shift
+            zeros = np.zeros(batch_size, dtype=np.float32)
+            self.movement_array = th.tensor(np.stack([sx, sy, zeros, zeros], axis=1))
+            self.shift = True
 
         # Create inputs and targets for all individual trials in the batch
         for i in range(batch_size):
@@ -159,12 +169,18 @@ class ExpTask:
 
     def shift_obs(self, obs):
         if self.shift:
-            obs = th.cat([obs[:,:2] - self.movement_array[:2], obs[:,2:]], dim=1)
+            # movement_array is either (4,) for pro_loc/vis_loc, or (batch_size, 4) for per-trial train_rand.
+            shift_xy = self.movement_array[..., :2]
+            obs = th.cat([obs[:, :2] - shift_xy, obs[:, 2:]], dim=1)
         return obs
 
     def shift_traj(self, xy):
         if self.shift:
-            xy = xy - self.movement_array
+            ma = self.movement_array
+            if ma.ndim == 1:
+                xy = xy - ma                     # broadcast (4,) over (batch, time, 4)
+            else:
+                xy = xy - ma.unsqueeze(1)         # (batch, 1, 4) broadcasts over time
         return xy
 
 
