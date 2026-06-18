@@ -52,8 +52,17 @@ class ModularPolicyGRU(nn.Module):
                  connectivity_delay: np.ndarray, spectral_scaling=None,
                  proportion_excitatory=None, input_gain=1.,
                  device=th.device("cpu"), random_seed=None, activation='tanh', output_delay=0,
-                 cancelation_matrix=None, last_task_proprio_only: bool=False):
+                 cancelation_matrix=None, last_task_proprio_only: bool=False, dale_mode='init'):
         super(ModularPolicyGRU, self).__init__()
+
+        # Dale's-law-through-training (OPTIONAL; default 'init' = legacy behavior, unchanged).
+        # 'reparam' maintains Dale on the candidate Wh recurrent block THROUGH training via
+        # W_eff = sign*relu(sign*W) (gradients flow to the raw W), and uses a per-unit,
+        # cross-module-aware E/I balance at init (vs the legacy global sum-normalization).
+        # Gates Wz/Wr are left free (sign is ill-posed for a [0,1] sigmoid gate). All of this
+        # is inert unless proportion_excitatory is set AND dale_mode='reparam'.
+        self.dale_mode = str(dale_mode)
+        self.dale_reparam = (self.dale_mode == 'reparam')
 
         # Store class info
         hidden_size = sum(module_size)
@@ -251,17 +260,33 @@ class ModularPolicyGRU(nn.Module):
 
         if proportion_excitatory:
             self.enforce_dale()
-            # Restoring E/I balance (optional logic, kept as is)
             with th.no_grad():
                 Wh_i, Wh = th.split(self.Wh, [input_size, hidden_size], dim=1)
-                inhib_mask = (self.unittype_W == -1)
-                excit_mask = (self.unittype_W == 1)
-                sum_inhib = th.sum(Wh[inhib_mask])
-                sum_excit = th.sum(Wh[excit_mask])
-                if th.abs(sum_inhib) > 1e-6:
-                    Wh[inhib_mask] /= th.abs(sum_inhib)
-                if th.abs(sum_excit) > 1e-6:
-                    Wh[excit_mask] /= sum_excit
+                if self.dale_reparam:
+                    # PER-postsynaptic-unit, cross-module-aware E/I balance: scale each unit's
+                    # inhibitory incoming recurrent weights so its total inhibition cancels its
+                    # total excitation -- INCLUDING the sparse excitatory-only cross-module drive
+                    # it receives (long-range projections are excitatory, so downstream modules
+                    # get a net-positive bias that local inhibition must absorb: the feedforward-
+                    # inhibition motif). Keeps the whole multi-module net in the inhibition-
+                    # stabilized/balanced regime (Baker-Harris 2023: balancing E/I means kills the
+                    # stability-governing outlier eigenvalue).
+                    excit_col = (self.unittype_W == 1).float()
+                    inhib_col = (self.unittype_W == -1).float()
+                    sumE = (Wh.abs() * excit_col).sum(dim=1, keepdim=True)
+                    sumI = (Wh.abs() * inhib_col).sum(dim=1, keepdim=True)
+                    scale = th.where(sumI > 1e-8, sumE / sumI, th.ones_like(sumI))
+                    Wh = Wh * (excit_col + inhib_col * scale)
+                else:
+                    # Legacy global sum-normalization (total E = total I = 1).
+                    inhib_mask = (self.unittype_W == -1)
+                    excit_mask = (self.unittype_W == 1)
+                    sum_inhib = th.sum(Wh[inhib_mask])
+                    sum_excit = th.sum(Wh[excit_mask])
+                    if th.abs(sum_inhib) > 1e-6:
+                        Wh[inhib_mask] /= th.abs(sum_inhib)
+                    if th.abs(sum_excit) > 1e-6:
+                        Wh[excit_mask] /= sum_excit
                 self.Wh.data = th.cat((Wh_i, Wh), dim=1)
 
         # Optional rescaling of Wh eigenvalues
@@ -308,6 +333,9 @@ class ModularPolicyGRU(nn.Module):
         # Update hidden state buffer
         self.h_buffer = self.update_buffer(self.h_buffer, h_prev)
 
+        # OPTIONAL Dale-through-training: sign-constrained effective Wh (no-op unless reparam).
+        Wh_use = self._dale_effective(self.Wh) if self.dale_reparam else self.Wh
+
         # If there are delays between modules we need to go module-by-module (this is slower)
         if self.max_connectivity_delay > 0:
             # Forward pass
@@ -322,7 +350,7 @@ class ModularPolicyGRU(nn.Module):
                 z = th.sigmoid(F.linear(concat, self.Wz[self.module_dims[i], :], self.bz[self.module_dims[i]]))
                 r = th.sigmoid(F.linear(concat, self.Wr, self.br))
                 concat_hidden = th.cat((x, r * h_prev_delayed), dim=1)
-                h_tilda = self.activation(F.linear(concat_hidden, self.Wh[self.module_dims[i], :],
+                h_tilda = self.activation(F.linear(concat_hidden, Wh_use[self.module_dims[i], :],
                                                    self.bh[self.module_dims[i]]) +
                                           (th.randn(len(self.module_dims[i])) * 1e-3))
                 h = (1 - z) * h_prev_delayed[:, self.module_dims[i]] + z * h_tilda
@@ -335,7 +363,7 @@ class ModularPolicyGRU(nn.Module):
             z = th.sigmoid(F.linear(concat, self.Wz, self.bz))
             r = th.sigmoid(F.linear(concat, self.Wr, self.br))
             concat_hidden = th.cat((x, r * h_prev), dim=1)
-            h_tilda = self.activation(F.linear(concat_hidden, self.Wh, self.bh) + (th.randn(self.Wh.shape[0]) * 1e-3))
+            h_tilda = self.activation(F.linear(concat_hidden, Wh_use, self.bh) + (th.randn(self.Wh.shape[0]) * 1e-3))
             h_new = (1 - z) * h_prev + z * h_tilda
 
         if self.cancelation_matrix is not None and self.counter in self.cancel_times:
@@ -362,6 +390,19 @@ class ModularPolicyGRU(nn.Module):
         self.Wz_cached = self.Wz.detach()
         self.Wh_cached = self.Wh.detach()
         self.Y_cached = self.Y.detach()
+
+    def _dale_effective(self, W):
+        """OPTIONAL (dale_mode='reparam'). Return W with its RECURRENT block (cols >= input_size)
+        sign-constrained by unit type -- excitatory presynaptic columns (+1) forced >=0,
+        inhibitory (-1) forced <=0 -- via W_eff = sign*relu(sign*W). Input block (cols <
+        input_size) is left unconstrained. Gradients flow to the raw W, so Dale's law is
+        maintained THROUGH training. No-op if unit types were never assigned."""
+        if not hasattr(self, 'unittype_W'):
+            return W
+        Wi, Wr = th.split(W, [self.input_size, self.hidden_size], dim=1)
+        sign = self.unittype_W                       # (hidden, hidden): +1 E / -1 I per presyn col
+        Wr_eff = sign * th.relu(sign * Wr)
+        return th.cat((Wi, Wr_eff), dim=1)
 
     def enforce_dale(self, zero_out=False):
         with th.no_grad():
