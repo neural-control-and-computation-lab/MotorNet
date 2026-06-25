@@ -125,7 +125,7 @@ plt.tight_layout()
 plt.show()
 
 
-# Plot deviations for each phase and each experiments across networks
+# Plot deviations for each phase and each experiment across networks
 
 total_curves = num_nets * len(training_sets)
 colors_CW = plt.cm.Greens(np.linspace(0.4, 0.9, total_curves))
@@ -249,14 +249,20 @@ plt.show()
 
 plot_color = [v["cmap"] for v in purtb_group.values()]
 
+# This is added for bringing both targets and trajectories to the center
+move_array = {'CW': np.array([-0.1, 0.0]),
+              'CCW': np.array([ 0.1, 0.0])}
+
 path = "set1"
 
 
 for exp in exp_names:
-    fig, axes = plt.subplots(len(phases), 2, figsize=(10, 4 * len(phases)))
+    # fig, axes = plt.subplots(len(phases), 2, figsize=(10, 4 * len(phases)))
+    fig, axes = plt.subplots(1, 2 * len(phases), figsize=(8 * len(phases), 4))
     fig.suptitle(f'Avg across networks, Exp = {exp}', fontsize=14)
 
     for f_ind, force_field in enumerate(['CW', 'CCW']):
+        shift = move_array[force_field]
         for i, phase in enumerate(phases):
             xy_accum = {'First Batch': [], 'Last Batch': []}
             target_accum = {'First Batch': [], 'Last Batch': []}
@@ -275,14 +281,22 @@ for exp in exp_names:
                 xy_avg = xy_net_avg.reshape(-1, n_targets, 200, 2).mean(dim=0)
                 target_avg = target_net_avg.reshape(-1, n_targets, 200, 2).mean(dim=0)
 
+                if exp in ['mov_diff_loc', 'pro_loc']:
+                    xy_avg = xy_avg + th.tensor(shift, dtype=xy_avg.dtype)
+
+                if exp in ['mov_diff_loc', 'vis_loc']:
+                    target_avg = target_avg + th.tensor(shift, dtype=target_avg.dtype)
+
                 target_x = target_avg[:, -1, 0]
                 target_y = target_avg[:, -1, 1]
 
-                ax = axes[i, j]
+                # ax = axes[i, j]
+                ax = axes[2*i+j]
                 ax.set_xlim([-0.4, 0.4])
                 ax.set_ylim([0, 0.6])
                 ax.set_title(f'{phase} — {label}')
                 plotor(axis=ax, cart_results=xy_avg, cmap=plot_color[f_ind])
+                # plotor(axis=ax, cart_results=xy_avg, cmap=plot_color[f_ind], colorbar_flag=0, linewidth=2) #This is a modified plotor function version with two new inputs to control showing the colorbar and linewidth
                 ax.scatter(target_x, target_y, s=12, color='blue')
 
     legend_elements = [
@@ -357,6 +371,7 @@ ordered_keys = None
 for set_name, set_path in training_sets.items():
     for net_id in range(num_nets):
 
+        # The commented lines are for plotting distance matrices for all individual networks
         #fig_rdm, axes_rdm = plt.subplots(1, len(exp_names), figsize=(6 * len(exp_names), 8))
         #fig_rdm.suptitle(f'Network = {net_id}, t = {t_before_go_plot}', fontsize=20)
 
@@ -387,8 +402,9 @@ for set_name, set_path in training_sets.items():
         #fig_rdm.tight_layout()
 
     # Averaged RDM across networks
-    fig_rdm_avg, axes_rdm_avg = plt.subplots(1, len(exp_names), figsize=(6 * len(exp_names), 8))
-    fig_rdm_avg.suptitle(f'Averaged across {num_nets} networks, t = {t_before_go_plot}', fontsize=20)
+    # fig_rdm_avg, axes_rdm_avg = plt.subplots(1, len(exp_names), figsize=(6 * len(exp_names), 8))
+    fig_rdm_avg, axes_rdm_avg = plt.subplots(len(exp_names),1, figsize=(8, 8 * len(exp_names)))
+    fig_rdm_avg.suptitle(f'Averaged across {num_nets} networks, t = {-1 * t_before_go_plot}', fontsize=20)
 
     for ax, exp in zip(axes_rdm_avg, exp_names):
         avg_rdm = np.mean(RDM_matrix[exp], axis=0)  # (num_nets, N, N) -> (N, N)
