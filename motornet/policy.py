@@ -52,8 +52,24 @@ class ModularPolicyGRU(nn.Module):
                  connectivity_delay: np.ndarray, spectral_scaling=None,
                  proportion_excitatory=None, input_gain=1.,
                  device=th.device("cpu"), random_seed=None, activation='tanh', output_delay=0,
-                 cancelation_matrix=None, last_task_proprio_only: bool=False):
+                 cancelation_matrix=None, last_task_proprio_only: bool=False,
+                 last_task_special: bool=False, dale_mode='init',
+                 cotune=False, out_exc=False):
         super(ModularPolicyGRU, self).__init__()
+
+        # Dale's-law-through-training (OPTIONAL; default 'init' = legacy behavior, unchanged).
+        # 'reparam' maintains Dale on the candidate Wh recurrent block THROUGH training via
+        # W_eff = sign*relu(sign*W) (gradients flow to the raw W), and uses a per-unit,
+        # cross-module-aware E/I balance at init (vs the legacy global sum-normalization).
+        # Gates Wz/Wr are left free (sign is ill-posed for a [0,1] sigmoid gate). All of this
+        # is inert unless proportion_excitatory is set AND dale_mode='reparam'.
+        self.dale_mode = str(dale_mode)
+        self.dale_reparam = (self.dale_mode == 'reparam')
+        # OPTIONAL co-tuned inhibition (each I unit's incoming weights = mean of a random E
+        # group in its module, via a fixed row-mix M) and excitatory-only readout (Y from E
+        # units, >=0). Both inert unless proportion_excitatory is also set. See below + forward.
+        self.cotune = bool(cotune)
+        self.out_exc = bool(out_exc)
 
         # Store class info
         hidden_size = sum(module_size)
@@ -81,6 +97,7 @@ class ModularPolicyGRU(nn.Module):
         self.counter = 0
         self.cancel_times = None
         self.last_task_proprio_only = last_task_proprio_only
+        self.last_task_special = last_task_special
 
         if cancelation_matrix is None:
             self.cancelation_matrix = cancelation_matrix
@@ -152,6 +169,16 @@ class ModularPolicyGRU(nn.Module):
                     # The last task input connects only to modules that also get proprioceptive input
                     last_task_dim = task_dim[-1]
                     h_probability_mask[np.ix_(rows, [last_task_dim])] = proprio_mask[i_mod]
+                elif self.last_task_special:
+                    # General task inputs connect based on task_mask
+                    general_task_dims = task_dim[:-1]
+                    if len(general_task_dims) > 0:
+                        h_probability_mask[np.ix_(rows, general_task_dims)] = task_mask[i_mod]
+
+                    # The last task input connects only to modules that also get proprioceptive input
+                    last_task_dim = task_dim[-1]
+                    special = [1, 1, 0, 0]
+                    h_probability_mask[np.ix_(rows, [last_task_dim])] = special[i_mod]
                 else:
                     # All task inputs connect based on task_mask if the special case is disabled
                     h_probability_mask[np.ix_(rows, task_dim)] = task_mask[i_mod]
@@ -219,6 +246,32 @@ class ModularPolicyGRU(nn.Module):
                 # This needs to be broadcast correctly
                 self.unittype_W[:, indices] = unit_types.unsqueeze(0).expand(hidden_size, -1)
 
+            # OPTIONAL co-tuned inhibition (cotune): fixed row-mix M maps each E unit to itself
+            # and each I unit to the MEAN of a random group of E units in its OWN module, so the
+            # I unit's incoming weights mirror that E group (effective W = M @ W). This makes the
+            # inhibition co-tuned to the local + inter-area excitatory drive (incl. PMd->M1, since
+            # the full row is mirrored); outgoing inhibition stays free and Dale-negative.
+            if self.cotune:
+                Mc = np.eye(hidden_size, dtype=np.float32)
+                ut = self.unittype_W[0, :].detach().cpu().numpy()
+                for m in range(self.num_modules):
+                    idx = self.module_dims[m]
+                    Em = idx[ut[idx] == 1]; Im = idx[ut[idx] == -1]
+                    if len(Em) == 0 or len(Im) == 0:
+                        continue
+                    grp = max(1, int(round(len(Em) / len(Im))))   # ~E:I E units per I unit
+                    for ii in Im:
+                        sel = self.rng.choice(Em, size=min(grp, len(Em)), replace=False)
+                        Mc[ii, :] = 0.0
+                        Mc[ii, sel] = 1.0 / len(sel)
+                self.M_cotune = nn.Parameter(th.tensor(Mc), requires_grad=False)
+            # OPTIONAL excitatory-only readout (out_exc): 1 for E units, 0 for I. Applied as
+            # relu(Y) * E_readout in forward so the motor command is excitatory and >=0.
+            if self.out_exc:
+                self.E_readout = nn.Parameter(
+                    th.tensor((self.unittype_W[0, :].detach().cpu().numpy() == 1).astype(np.float32)),
+                    requires_grad=False)
+
             # Eliminate inhibitory connections across modules (optional logic, kept as is)
             for i_mod in range(self.num_modules):
                 for j_mod in range(self.num_modules):
@@ -251,17 +304,33 @@ class ModularPolicyGRU(nn.Module):
 
         if proportion_excitatory:
             self.enforce_dale()
-            # Restoring E/I balance (optional logic, kept as is)
             with th.no_grad():
                 Wh_i, Wh = th.split(self.Wh, [input_size, hidden_size], dim=1)
-                inhib_mask = (self.unittype_W == -1)
-                excit_mask = (self.unittype_W == 1)
-                sum_inhib = th.sum(Wh[inhib_mask])
-                sum_excit = th.sum(Wh[excit_mask])
-                if th.abs(sum_inhib) > 1e-6:
-                    Wh[inhib_mask] /= th.abs(sum_inhib)
-                if th.abs(sum_excit) > 1e-6:
-                    Wh[excit_mask] /= sum_excit
+                if self.dale_reparam:
+                    # PER-postsynaptic-unit, cross-module-aware E/I balance: scale each unit's
+                    # inhibitory incoming recurrent weights so its total inhibition cancels its
+                    # total excitation -- INCLUDING the sparse excitatory-only cross-module drive
+                    # it receives (long-range projections are excitatory, so downstream modules
+                    # get a net-positive bias that local inhibition must absorb: the feedforward-
+                    # inhibition motif). Keeps the whole multi-module net in the inhibition-
+                    # stabilized/balanced regime (Baker-Harris 2023: balancing E/I means kills the
+                    # stability-governing outlier eigenvalue).
+                    excit_col = (self.unittype_W == 1).float()
+                    inhib_col = (self.unittype_W == -1).float()
+                    sumE = (Wh.abs() * excit_col).sum(dim=1, keepdim=True)
+                    sumI = (Wh.abs() * inhib_col).sum(dim=1, keepdim=True)
+                    scale = th.where(sumI > 1e-8, sumE / sumI, th.ones_like(sumI))
+                    Wh = Wh * (excit_col + inhib_col * scale)
+                else:
+                    # Legacy global sum-normalization (total E = total I = 1).
+                    inhib_mask = (self.unittype_W == -1)
+                    excit_mask = (self.unittype_W == 1)
+                    sum_inhib = th.sum(Wh[inhib_mask])
+                    sum_excit = th.sum(Wh[excit_mask])
+                    if th.abs(sum_inhib) > 1e-6:
+                        Wh[inhib_mask] /= th.abs(sum_inhib)
+                    if th.abs(sum_excit) > 1e-6:
+                        Wh[excit_mask] /= sum_excit
                 self.Wh.data = th.cat((Wh_i, Wh), dim=1)
 
         # Optional rescaling of Wh eigenvalues
@@ -296,17 +365,23 @@ class ModularPolicyGRU(nn.Module):
     def set_cancel_times(self, times):
         self.cancel_times = times
 
-    @th.compile(mode='max-autotune')
+    #@th.compile(mode='max-autotune')
     def update_buffer(self, h_buffer, h_prev):
         # Create a new tensor by concatenating h_prev (reshaped appropriately) with the older values
         # Skip the last value to maintain the buffer size
         new_h_buffer = th.cat((h_prev.unsqueeze(-1), h_buffer[:, :, :-1]), dim=-1)
         return new_h_buffer
 
-    @th.compile(mode='max-autotune')
+    #@th.compile(mode='max-autotune')
     def forward(self, x, h_prev):
         # Update hidden state buffer
         self.h_buffer = self.update_buffer(self.h_buffer, h_prev)
+
+        # OPTIONAL Dale-reparam + co-tuned row-mix + excitatory readout (no-ops unless enabled).
+        Wz_use = self._effective_W(self.Wz)
+        Wr_use = self._effective_W(self.Wr)
+        Wh_use = self._effective_W(self.Wh, is_candidate=True)
+        Y_use = self._effective_Y()
 
         # If there are delays between modules we need to go module-by-module (this is slower)
         if self.max_connectivity_delay > 0:
@@ -319,10 +394,10 @@ class ModularPolicyGRU(nn.Module):
                     h_prev_delayed[:, self.module_dims[j]] = self.h_buffer[:, self.module_dims[j],
                                                                            self.connectivity_delay[i, j]]
                 concat = th.cat((x, h_prev_delayed), dim=1)
-                z = th.sigmoid(F.linear(concat, self.Wz[self.module_dims[i], :], self.bz[self.module_dims[i]]))
-                r = th.sigmoid(F.linear(concat, self.Wr, self.br))
+                z = th.sigmoid(F.linear(concat, Wz_use[self.module_dims[i], :], self.bz[self.module_dims[i]]))
+                r = th.sigmoid(F.linear(concat, Wr_use, self.br))
                 concat_hidden = th.cat((x, r * h_prev_delayed), dim=1)
-                h_tilda = self.activation(F.linear(concat_hidden, self.Wh[self.module_dims[i], :],
+                h_tilda = self.activation(F.linear(concat_hidden, Wh_use[self.module_dims[i], :],
                                                    self.bh[self.module_dims[i]]) +
                                           (th.randn(len(self.module_dims[i])) * 1e-3))
                 h = (1 - z) * h_prev_delayed[:, self.module_dims[i]] + z * h_tilda
@@ -332,10 +407,10 @@ class ModularPolicyGRU(nn.Module):
         # If there are no delays between modules we can do a single pass
         else:
             concat = th.cat((x, h_prev), dim=1)
-            z = th.sigmoid(F.linear(concat, self.Wz, self.bz))
-            r = th.sigmoid(F.linear(concat, self.Wr, self.br))
+            z = th.sigmoid(F.linear(concat, Wz_use, self.bz))
+            r = th.sigmoid(F.linear(concat, Wr_use, self.br))
             concat_hidden = th.cat((x, r * h_prev), dim=1)
-            h_tilda = self.activation(F.linear(concat_hidden, self.Wh, self.bh) + (th.randn(self.Wh.shape[0]) * 1e-3))
+            h_tilda = self.activation(F.linear(concat_hidden, Wh_use, self.bh) + (th.randn(self.Wh.shape[0]) * 1e-3))
             h_new = (1 - z) * h_prev + z * h_tilda
 
         if self.cancelation_matrix is not None and self.counter in self.cancel_times:
@@ -344,9 +419,9 @@ class ModularPolicyGRU(nn.Module):
 
         # Output layer
         if self.output_delay == 0:
-            y = th.sigmoid(F.linear(h_new, self.Y, self.bY))
+            y = th.sigmoid(F.linear(h_new, Y_use, self.bY))
         else:
-            y = th.sigmoid(F.linear(self.h_buffer[:, :, self.output_delay-1], self.Y, self.bY))
+            y = th.sigmoid(F.linear(self.h_buffer[:, :, self.output_delay-1], Y_use, self.bY))
         self.counter += 1
         return y, h_new
 
@@ -362,6 +437,35 @@ class ModularPolicyGRU(nn.Module):
         self.Wz_cached = self.Wz.detach()
         self.Wh_cached = self.Wh.detach()
         self.Y_cached = self.Y.detach()
+
+    def _dale_effective(self, W):
+        """OPTIONAL (dale_mode='reparam'). Return W with its RECURRENT block (cols >= input_size)
+        sign-constrained by unit type -- excitatory presynaptic columns (+1) forced >=0,
+        inhibitory (-1) forced <=0 -- via W_eff = sign*relu(sign*W). Input block (cols <
+        input_size) is left unconstrained. Gradients flow to the raw W, so Dale's law is
+        maintained THROUGH training. No-op if unit types were never assigned."""
+        if not hasattr(self, 'unittype_W'):
+            return W
+        Wi, Wr = th.split(W, [self.input_size, self.hidden_size], dim=1)
+        sign = self.unittype_W                       # (hidden, hidden): +1 E / -1 I per presyn col
+        Wr_eff = sign * th.relu(sign * Wr)
+        return th.cat((Wi, Wr_eff), dim=1)
+
+    def _effective_W(self, W, is_candidate=False):
+        """Effective weight used in the forward: optional Dale reparam (candidate Wh recurrent
+        block only) then optional co-tuned row-mix (each I unit's incoming row = mean of its E
+        group, via M_cotune). Gradients flow to the underlying E weights."""
+        if is_candidate and self.dale_reparam:
+            W = self._dale_effective(W)
+        if self.cotune and hasattr(self, 'M_cotune'):
+            W = self.M_cotune @ W
+        return W
+
+    def _effective_Y(self):
+        """Effective readout: optional excitatory-only (from E units, >=0)."""
+        if self.out_exc and hasattr(self, 'E_readout'):
+            return th.relu(self.Y) * self.E_readout.unsqueeze(0)
+        return self.Y
 
     def enforce_dale(self, zero_out=False):
         with th.no_grad():
