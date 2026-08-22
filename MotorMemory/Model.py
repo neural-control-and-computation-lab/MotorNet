@@ -1,7 +1,7 @@
 import torch as th
 import numpy as np
 from Plots import plot_episode
-from utils import applied_load
+from utils import applied_load, movement_phase_mask
 import copy
 
 # Run a single episode
@@ -59,8 +59,10 @@ def run_episode(env, task, policy, batch_size, n_t, device, force_field = 'null'
         obs = th.concat((obs, inp[:, t_step, :]), dim=1)
         action, h = policy(obs, h)
 
-        # Compute endpoint load (force field)
-        force_mask = (inp[:, t_step, 2].abs() < 1e-3).float().unsqueeze(1)
+        # The task's go cue is noisy: approximately 1 while holding and 0 after go.
+        # Recover that discrete phase with a midpoint threshold so the curl field is
+        # continuously on during movement instead of flickering with input noise.
+        force_mask = movement_phase_mask(inp[:, t_step, 2])
         applied_force  = applied_load(endpoint_vel = info['states']['cartesian'][:, 2:], k = k, mode = force_dir)
         masked_force_field = applied_force * force_mask
 
@@ -179,6 +181,11 @@ def train_batches(env, task, policy, optimizer, n_batches, batch_size, interval,
         loss_dict['total'].backward()
         th.nn.utils.clip_grad_norm_(policy.parameters(),max_norm=1)  # important to make sure gradients don't get crazy
         optimizer.step()
+        # Gradient masks alone do not freeze parameters for stateful optimizers:
+        # retained Adam momentum (or weight decay) can still move zero-gradient
+        # entries. Restore the exact phase-boundary values after every update.
+        if hasattr(policy, 'enforce_frozen_weights'):
+            policy.enforce_frozen_weights()
 
 
 
@@ -203,7 +210,6 @@ def test_batches(env , task, policy, n_batches, batch_size, interval, ep_dur, de
         endpoint_dev.append(end_dev)
 
     return episode_data, endpoint_dev, lateral_dev
-
 
 
 

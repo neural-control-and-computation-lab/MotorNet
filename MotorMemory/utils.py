@@ -1,6 +1,17 @@
 import torch as th
 import matplotlib.pyplot as plt
 
+
+def movement_phase_mask(go_cue, threshold=0.5):
+    """Return 1 during movement and 0 during the instructed hold.
+
+    ``ExpTask`` encodes the hold/go state as 1/0 and then adds input noise.  A
+    midpoint threshold therefore preserves the discrete task state despite that
+    noise; testing for an exact (or near-exact) zero makes the curl field flicker.
+    """
+    return (go_cue < threshold).to(dtype=go_cue.dtype).unsqueeze(-1)
+
+
 def policy_mod(phase):
 # During "growing_up" phase: train everything
     if phase == 'growing_up':
@@ -24,11 +35,11 @@ def policy_mod(phase):
 def applied_load(endpoint_vel, k, mode = 'CW'):
     # Curved Force
     if mode == 'CW':
-        curl_matrix = th.tensor([[0., -1.], [1., 0.]])  # Clockwise
+        curl_matrix = endpoint_vel.new_tensor([[0., -1.], [1., 0.]])  # Clockwise
     elif mode == 'CCW':
-        curl_matrix = th.tensor([[0., 1.], [-1., 0.]])   # Counterclockwise
+        curl_matrix = endpoint_vel.new_tensor([[0., 1.], [-1., 0.]])   # Counterclockwise
     else:
-        curl_matrix = th.tensor([[0., 0.], [0., 0.]])
+        curl_matrix = endpoint_vel.new_zeros((2, 2))
     force_field = k * endpoint_vel @ curl_matrix
 
     return force_field
@@ -102,8 +113,6 @@ if __name__ == "__main__":
     batch_number2 = '1'
     state2 = eval_weights(saveLoc, phase2, exp2, batch_number2)
     compare_weights(state1, state2)
-
-
 
 
 

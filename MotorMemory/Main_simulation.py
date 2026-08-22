@@ -115,6 +115,10 @@ def run_training(env, task, cfg):
             # Carry Adam's m/v across phase boundaries to avoid the lr*sign(g) first-step blow-up.
             if os.path.exists(prev_opt_path):
                 optimizer.load_state_dict(th.load(prev_opt_path))
+            # The loaded optimizer contains moments for weights frozen at this
+            # phase boundary. Zero only those entries; recurrent weights retain
+            # their optimizer history and continue adapting normally.
+            policy.clear_frozen_optimizer_state(optimizer)
 
         force_field = 'random' if phase == 'FF1' else 'null'
         contextual_cue = 'random' if phase in ['NF1', 'NF2'] else 'force_dependent'

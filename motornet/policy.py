@@ -553,14 +553,61 @@ class ModularPolicyGRU(nn.Module):
         return Q
 
 
-# Freeze input or output part of the network during training by zeroing out corresponding mask entries.
+    def _frozen_parameter_masks(self):
+        """Return boolean masks for parameter entries frozen by ``freeze``."""
+        frozen = []
+        if getattr(self, '_input_weights_frozen', False):
+            for parameter in (self.Wz, self.Wr, self.Wh):
+                mask = th.zeros_like(parameter, dtype=th.bool)
+                mask[:, :self.input_size] = True
+                frozen.append((parameter, mask))
+        if getattr(self, '_output_weights_frozen', False):
+            frozen.append((self.Y, th.ones_like(self.Y, dtype=th.bool)))
+            frozen.append((self.bY, th.ones_like(self.bY, dtype=th.bool)))
+        return frozen
+
+    def clear_frozen_optimizer_state(self, optimizer):
+        """Remove optimizer momentum for frozen entries while retaining all other state.
+
+        Adam and momentum SGD can update a parameter even when its current gradient
+        is zero. This method is intentionally called after loading optimizer state at
+        a phase boundary. Scalar state such as Adam's step counter is left untouched.
+        """
+        with th.no_grad():
+            for parameter, frozen_mask in self._frozen_parameter_masks():
+                for state_value in optimizer.state.get(parameter, {}).values():
+                    if th.is_tensor(state_value) and state_value.shape == parameter.shape:
+                        state_value.masked_fill_(frozen_mask, 0)
+
+    def enforce_frozen_weights(self):
+        """Restore frozen entries exactly after an optimizer update."""
+        with th.no_grad():
+            if getattr(self, '_input_weights_frozen', False):
+                self.Wz[:, :self.input_size].copy_(self._frozen_input_Wz)
+                self.Wr[:, :self.input_size].copy_(self._frozen_input_Wr)
+                self.Wh[:, :self.input_size].copy_(self._frozen_input_Wh)
+            if getattr(self, '_output_weights_frozen', False):
+                self.Y.copy_(self._frozen_output_Y)
+                self.bY.copy_(self._frozen_output_bY)
+
+    # Freeze input or output weights during training.
     def freeze(self, input_freeze, output_freeze):
         if input_freeze:
             with th.no_grad():
                 self.mask_Wz[:, :self.input_size] = 0
                 self.mask_Wr[:, :self.input_size] = 0
                 self.mask_Wh[:, :self.input_size] = 0
+                # Keep independent snapshots: detach() alone would share storage
+                # with the live parameter and therefore would not be a freeze.
+                self._frozen_input_Wz = self.Wz[:, :self.input_size].detach().clone()
+                self._frozen_input_Wr = self.Wr[:, :self.input_size].detach().clone()
+                self._frozen_input_Wh = self.Wh[:, :self.input_size].detach().clone()
+                self._input_weights_frozen = True
 
         if output_freeze:
             with th.no_grad():
                 self.mask_Y[:] = 0
+                self.mask_bY[:] = 0
+                self._frozen_output_Y = self.Y.detach().clone()
+                self._frozen_output_bY = self.bY.detach().clone()
+                self._output_weights_frozen = True
