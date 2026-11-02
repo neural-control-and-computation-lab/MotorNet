@@ -1,11 +1,12 @@
 import torch as th
 import numpy as np
 from Plots import plot_episode
-from utils import applied_load, movement_phase_mask
+from utils import applied_load, applied_external_load, movement_phase_mask
 import copy
+import motornet as mn
 
 # Run a single episode
-def run_episode(env, task, policy, batch_size, n_t, device, force_field = 'null', contextual_cue = 'null', k = 0, *args, **kwargs ):
+def run_episode(env, task, policy, batch_size, n_t, device, force_field = 'null', contextual_cue = 'null', k = 0, is_channel = None, chan_k = 2000., chan_b = 125., *args, **kwargs ):
     if force_field == 'random':
         force_dir = np.random.choice(['CW', 'CCW'])
     elif force_field == 'CW':
@@ -50,6 +51,8 @@ def run_episode(env, task, policy, batch_size, n_t, device, force_field = 'null'
     all_inp = []
     all_vis_inp = []
     all_joint = []
+    all_channel_force = []
+
 
 
 
@@ -58,15 +61,15 @@ def run_episode(env, task, policy, batch_size, n_t, device, force_field = 'null'
         obs = task.shift_obs(obs) # This line added for Exp 8
         obs = th.concat((obs, inp[:, t_step, :]), dim=1)
         action, h = policy(obs, h)
-
+        
+        # Compute endpoint load (force field)
         # The task's go cue is noisy: approximately 1 while holding and 0 after go.
         # Recover that discrete phase with a midpoint threshold so the curl field is
         # continuously on during movement instead of flickering with input noise.
         force_mask = movement_phase_mask(inp[:, t_step, 2])
-        applied_force  = applied_load(endpoint_vel = info['states']['cartesian'][:, 2:], k = k, mode = force_dir)
-        masked_force_field = applied_force * force_mask
+        applied_force, channel_force = applied_external_load(task = task, info = info, target = targets, time_step = t_step, curl_gain = k, chan_k = chan_k, chan_b = chan_b, force_mask = force_mask, mode= force_dir, is_channel=is_channel)
 
-        obs, reward, terminated, truncated, info = env.step(action=action, endpoint_load = masked_force_field)
+        obs, reward, terminated, truncated, info = env.step(action=action, endpoint_load = applied_force)
         xy.append(info['states']['cartesian'][:, None, :])
         all_actions.append(action[:, None, :])
         all_muscle.append(info['states']['muscle'][:, 0, None, :])
@@ -76,6 +79,7 @@ def run_episode(env, task, policy, batch_size, n_t, device, force_field = 'null'
         all_inp.append(th.unsqueeze(inp[:, t_step, :], dim=1))
         all_vis_inp.append(obs[:, None, :2])
         all_joint.append(info['states']['joint'][:, None, :])
+        all_channel_force.append(channel_force[:, None, :])
 
     ext_force = force_dir
 
@@ -92,6 +96,7 @@ def run_episode(env, task, policy, batch_size, n_t, device, force_field = 'null'
         'joint' : th.cat(all_joint, dim=1),
         'ext_force' : ext_force,
         'traj' : task.shift_traj(th.cat(xy, dim=1)),
+        'channel_force' : th.cat(all_channel_force, dim=1),
     }
 
 
@@ -123,8 +128,9 @@ def calculate_loss(task,episode_data):
 
 # Compute deviations for a single episode.
 def calculate_deviations(task, episode_data, n_t, eps = 1e-6):
-    xy = episode_data['xy']
-    xy = task.shift_traj(xy)
+    # xy = episode_data['xy']
+    # xy = task.shift_traj(xy)
+    xy = episode_data['traj']
     targets = episode_data['targets']
 
     point1 = th.tile(th.unsqueeze(targets[:, 0, :], 1), (1, n_t - 1, 1))
@@ -135,12 +141,14 @@ def calculate_deviations(task, episode_data, n_t, eps = 1e-6):
     denominator = th.sqrt(th.pow(diff[:, :, 1], 2) + th.pow(diff[:, :, 0], 2))
     nonzero_den = (denominator.abs() > eps).all(dim=1)
     ratio = numerator[nonzero_den] / denominator[nonzero_den]
-    lateral = th.mean(ratio[th.arange(ratio.shape[0]),(th.max(th.abs(ratio), dim=1)[1])])
+    
+    lateral_mean = th.mean(ratio[th.arange(ratio.shape[0]),(th.max(th.abs(ratio), dim=1)[1])])
+    endpoint_mean = th.mean(th.norm(targets[:, -1, :] - xy[:, -1, :2], dim=1))
 
-    endpoint = th.mean(th.norm(targets[:, -1, :] - xy[:, -1, :2], dim=1))
+    lateral_batch = ratio[th.arange(ratio.shape[0]), th.max(th.abs(ratio), dim=1)[1]]
+    endpoint_batch = th.norm(targets[:, -1, :] - xy[:, -1, :2], dim=1)
 
-    return lateral, endpoint
-
+    return lateral_mean, endpoint_mean, lateral_batch, endpoint_batch
 
 # Run multiple training batches and optimize the policy.
 def train_batches(env, task, policy, optimizer, n_batches, batch_size, interval, ep_dur, device, run_mode, force_field, contextual_cue, k, *args, **kwargs ):
@@ -164,7 +172,7 @@ def train_batches(env, task, policy, optimizer, n_batches, batch_size, interval,
         spectral_losses.append(loss_dict['spectral'].item())
         jerk_losses.append(loss_dict['jerk'].item())
 
-        lat_dev, end_dev = calculate_deviations(task, episode_data, n_t)
+        lat_dev, end_dev, lat_dev_batch, end_dev_batch = calculate_deviations(task, episode_data, n_t)
         if task.cue == 'left':
             lat_dev = - lat_dev
         else:
@@ -199,19 +207,28 @@ def train_batches(env, task, policy, optimizer, n_batches, batch_size, interval,
 def test_batches(env , task, policy, n_batches, batch_size, interval, ep_dur, device, run_mode, force_field, contextual_cue, k, *args, **kwargs ):
     task.run_mode = run_mode
     n_t = int(ep_dur / env.effector.dt) + 1
-    endpoint_dev = []
-    lateral_dev = []
+    endpoint_dev_mean = []
+    lateral_dev_mean = []
+    endpoint_dev_batch = []
+    lateral_dev_batch = []
     for batch in range(n_batches):
         episode_data = run_episode(env=env, task=task, policy=policy, batch_size=batch_size, n_t=n_t, device=device, force_field=force_field, contextual_cue=contextual_cue, k=k, *args, **kwargs)
-        lat_dev, end_dev = calculate_deviations(task, episode_data, n_t)
+        lat_dev_mean, end_dev_mean, lat_dev_batch, end_dev_batch = calculate_deviations(task, episode_data, n_t)
         if task.cue == 'left':
-            lat_dev = - lat_dev
+            lat_dev_mean = - lat_dev_mean
+            lat_dev_batch = - lat_dev_batch
         else:
-            lat_dev = lat_dev
-        lateral_dev.append(lat_dev)
-        endpoint_dev.append(end_dev)
+            lat_dev_mean = lat_dev_mean
+            lat_dev_batch = lat_dev_batch
+            
+        lateral_dev_mean.append(lat_dev_mean)
+        endpoint_dev_mean.append(end_dev_mean)
+        lateral_dev_batch.append(lat_dev_batch)
+        endpoint_dev_batch.append(end_dev_batch)
 
-    return episode_data, endpoint_dev, lateral_dev
+
+    return episode_data, endpoint_dev_mean, lateral_dev_mean, endpoint_dev_batch, lateral_dev_batch
+
 
 
 
