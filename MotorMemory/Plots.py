@@ -14,7 +14,8 @@ import numpy as np
 import torch as th
 from sklearn.decomposition import PCA
 from collections import Counter
-
+from scipy.stats import gaussian_kde
+from matplotlib.lines import Line2D
 
 
 plotor = mn.plotor.plot_pos_over_time
@@ -80,6 +81,97 @@ def plot_episode(batch,n_batch, interval,episode_data, title = None):
       plot_simulations(xy=xy.detach()[:, :, :2], target_xy=all_targets.detach(), title=suptitle)
 
 
+def plot_episode_new(batch,episode_data, title = None):
+    xy = episode_data['xy']
+    obs = episode_data['vis_inp']
+    fingertip = episode_data['xy']
+    xy_traj = episode_data['traj']
+    all_targets = episode_data['targets']
+    all_hidden = episode_data['hidden']
+    all_muscle = episode_data['muscle']
+    inp = episode_data['inp']
+
+    mm = mn.muscle.RigidTendonHillMuscle()
+    ee = mn.effector.RigidTendonArm26(muscle=mm, timestep=0.01)
+    base_joint = np.deg2rad([40., 110., 0., 0.]).astype(np.float32)
+    center_position = ee.joint2cartesian(th.tensor(base_joint))
+    radius = 0.1
+    [x_min, y_min] = center_position[0, :2].detach().numpy()
+    [x_max, y_max] = [x_min + radius, y_min + radius]
+
+    fg1, ax1 = plt.subplots(nrows=3, ncols=1, figsize=(4,6))
+    fg1.suptitle('Input', fontsize=16)
+    ind = 0
+    to_plot = 150
+    time_vec = np.arange(to_plot)
+    batch_size = inp.size(0)
+    starting_point = np.repeat(xy[ind, 0, :].detach().cpu().numpy()[None, :], to_plot, axis=0)
+    ax1[0].plot(time_vec/100,(starting_point[:, 0] - x_min) , color = 'orange', label = 'x')
+    ax1[0].plot(time_vec/100, (starting_point[:, 1] - y_min) , color = 'blue', label = 'y')
+    ax1[0].legend(['x','y'], loc='upper right', fontsize=14, frameon=False)
+    # ax1[0].set_title('Inputs', fontsize=12)
+    ax1[0].set_ylabel('Start [m]', fontsize=14)
+    ax1[0].spines["top"].set_visible(False)
+    ax1[0].spines["right"].set_visible(False)
+    ax1[0].set_ylim([-0.05,0.15])
+    ax1[0].set_xticks([])
+    ax1[0].set_yticks([0, 0.1])
+    ax1[0].tick_params(axis='y', labelsize=14)
+
+    target = np.repeat(all_targets[ind, -1, :].detach().cpu().numpy()[None, :], to_plot, axis=0)
+    ax1[1].plot(time_vec/100, (target[:,0] - x_min) , color = 'orange')
+    ax1[1].plot(time_vec/100, (target[:,1] - y_min) , color='blue')
+    ax1[1].set_ylabel('Target [m]', fontsize=14)
+    # ax1[1].legend(['x','y'], loc='upper right', fontsize=10, frameon=False)
+    ax1[1].spines["top"].set_visible(False)
+    ax1[1].spines["right"].set_visible(False)
+    ax1[1].set_ylim([-0.05,0.12])
+    ax1[1].set_xticks([])
+    ax1[1].set_yticks([0, 0.1])
+    ax1[1].tick_params(axis='y', labelsize=14)
+
+    ax1[2].plot(time_vec/100, np.squeeze(inp.detach().cpu().numpy()[ind, :to_plot, 2]), color='green')
+    ax1[2].set_ylabel('Go Cue', fontsize=14)
+    ax1[2].set_xlabel('Time [s]', fontsize=14)
+    ax1[2].spines["top"].set_visible(False)
+    ax1[2].spines["right"].set_visible(False)
+    ax1[2].set_ylim([-0.05, 1.05])
+    ax1[2].set_yticks([0,  1.0])
+    ax1[2].set_xticks([0, 1.5])
+    ax1[2].tick_params(axis='both', labelsize=14)
+
+    fg2, ax2 = plt.subplots(nrows=2, ncols=1, figsize=(4, 4))
+    fg2.suptitle('Output', fontsize=16)
+
+    ax2[0].plot(time_vec/100, (np.squeeze(xy.detach().cpu().numpy()[ind, :to_plot, 0]) - x_min) , color='orange', zorder=1)
+    ax2[0].plot(time_vec/100, (np.squeeze(xy.detach().cpu().numpy()[ind, :to_plot, 1]) - y_min) , color='blue', zorder=1)
+    ax2[0].plot(time_vec/100, (np.squeeze(all_targets.detach().cpu().numpy()[ind, :to_plot, 0]) - x_min) , color='orange', linestyle='--', zorder=0)
+    ax2[0].plot(time_vec/100, (np.squeeze(all_targets.detach().cpu().numpy()[ind, :to_plot, 1]) - y_min) , color='blue', linestyle='--', zorder= 0)
+    ax2[0].set_ylabel('Hand Pos [m]', fontsize=14)
+    # ax2[0].legend(['x', 'y'], loc='upper right', fontsize=10, frameon=False)
+    ax2[0].spines["top"].set_visible(False)
+    ax2[0].spines["right"].set_visible(False)
+    ax2[0].set_ylim([-0.05, 0.2])
+    ax2[0].set_xticks([])
+    ax2[0].text(55, 0.12, "goal", fontsize=10, ha="left", va="center")
+    ax2[0].set_yticks([0, 0.1])
+    ax2[0].tick_params(axis='y', labelsize=14)
+
+    ax2[1].plot(time_vec/100, np.squeeze(xy.detach().cpu().numpy()[ind, :to_plot, 2]), color='orange')
+    ax2[1].plot(time_vec/100, np.squeeze(xy.detach().cpu().numpy()[ind, :to_plot, 3]), color='blue')
+    ax2[1].set_ylabel('Vel [m/s]', fontsize=14)
+    # ax2[1].legend(['x', 'y'], loc='upper right', fontsize=10, frameon=False)
+    ax2[1].spines["top"].set_visible(False)
+    ax2[1].spines["right"].set_visible(False)
+    ax2[1].set_xlabel('Time [s]', fontsize=14)
+    # ax2[1].set_ylim([0, 0.6])
+    ax2[1].set_yticks([0, 0.6])
+    ax2[1].set_xticks([0, 1.5])
+    ax2[1].tick_params(axis='both', labelsize=14)
+
+    plt.show()
+
+
 # Plot hand position, muscle activity, actions, force, neural activity, and their 3 first components for a given episode
 def plot_motion(batch,episode_data, title = None, plot_from = 0, plot_to = None):
     xy = episode_data['xy']
@@ -90,11 +182,7 @@ def plot_motion(batch,episode_data, title = None, plot_from = 0, plot_to = None)
     all_actions = episode_data['actions']
     all_targets = episode_data['targets']
 
-    fg, ax = plt.subplots(nrows=2, ncols=3, figsize=(10, 7))
-    if title is None:
-        fg.suptitle(f'Batch {batch}', fontsize=16)
-    else:
-        fg.suptitle(title, fontsize=16)
+    fg, ax = plt.subplots(figsize=(5, 5))
 
     time_frame = episode_data['xy'].shape[1]
     if plot_to is None:
@@ -102,41 +190,27 @@ def plot_motion(batch,episode_data, title = None, plot_from = 0, plot_to = None)
     time_vec = np.arange(plot_to)
 
     ind = 0
-    ax[0, 0].plot(time_vec[plot_from:plot_to], np.squeeze(xy.detach().cpu().numpy()[ind, plot_from:plot_to, 0]), label='x')
-    ax[0, 0].plot(time_vec[plot_from:plot_to], np.squeeze(xy.detach().cpu().numpy()[ind, plot_from:plot_to, 1]), label='y')
-    ax[0, 0].title.set_text('Position')
-    ax[0, 0].legend()
-
+    muscle_name = ['SF', 'SE', 'EF', 'EE', 'BF', 'BE']
     for i in range(all_muscle.shape[2]):
-      ax[0, 1].plot(time_vec[plot_from:plot_to], np.squeeze(all_muscle.detach().cpu().numpy()[ind, plot_from:plot_to, i]), label= f'muscle {i+1}')
-      ax[0, 2].plot(time_vec[plot_from:plot_to], np.squeeze(all_actions.detach().cpu().numpy()[ind, plot_from:plot_to, i]), label= f'muscle {i+1}')
-      ax[1, 0].plot(time_vec[plot_from:plot_to], np.squeeze(all_force.detach().cpu().numpy()[ind, plot_from:plot_to, i]), label= f'muscle {i+1}')
+      ax.plot(time_vec[plot_from:plot_to]/100, np.squeeze(all_muscle.detach().cpu().numpy()[ind, plot_from:plot_to, i]), label= muscle_name[i])
+    # ax.set_ylabel('Muscle activity', fontsize=16)
+    ax.set_ylabel('Muscle Activity [a.u]', fontsize=14)
+    ax.set_xlabel('Time [s]', fontsize=14)
 
-    ax[0, 1].title.set_text('Muscle activity')
-    ax[0, 1].legend()
+    ax.legend(fontsize=14, frameon=False, loc="upper right")
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.tick_params(axis='both', labelsize=14)
+    ax.set_yticks([0, 0.4, 0.8, 0.12])
+    ax.set_xticks([0, 1.5])
+    # ax.set_xlim([plot_from, plot_to])
+    ax.set_ylim([-0.01, 0.13])
 
-    ax[0, 2].title.set_text('Action')
-    ax[0, 2].legend()
+    # plt.show()
 
-    ax[1, 0].title.set_text('Force')
-    ax[1, 0].legend()
-
-    ax[1, 1].plot(time_vec[plot_from:plot_to], np.squeeze(all_hidden.detach().cpu().numpy()[ind, plot_from:plot_to, :]))
-    ax[1, 1].title.set_text('Neural activity')
-
-    n_components = 3
-    pca = PCA(n_components=n_components)
-    hidden_reduced = pca.fit_transform(np.squeeze(all_hidden.detach().cpu().numpy()[ind, :, :]))
-    for n in range(n_components):
-      ax[1, 2].plot(time_vec[plot_from:plot_to], hidden_reduced[plot_from:plot_to, n], label= f'Component {n+1}')
-    ax[1, 2].title.set_text('Neural activity (PCA)')
-    ax[1, 2].legend()
-
-    plt.show()
-
-    plot_simulations(xy=xy.detach()[:, :, :2], target_xy=all_targets.detach(), title = title)
+    # plot_simulations(xy=xy.detach()[:, :, :2], target_xy=all_targets.detach(), title = title)
     # plot_simulations(xy = xy_traj.detach()[:, :, :2], target_xy=all_targets.detach(), title=title)
-
+    plot_episode_new(batch, episode_data, title=None)
 
 
 # Plot endpoint and lateral deviation across training or test batches
@@ -244,71 +318,143 @@ def plot_subspace_ind(data, t_before_go = 10, title = None):
 
 
 
-# Plot hidden neural activity subspaces for an all batches across phases, or experiments, networks.
-def plot_subspace_batch(all_hidden_reduced, all_labels, all_batch_size, title=None, ax=None, data_color = None, data_label = None, elev = 20, azim = 45, cmaps = None):
+# Plot hidden neural activity subspaces for all batches across phases, or experiments, networks.
+
+def _plot_kde_projection(ax, x, y, zdir, offset, color, xlim, ylim,
+                          levels=6, thresh=0.15, alpha=0.3, grid_size=60):
+    x = np.asarray(x)
+    y = np.asarray(y)
+    if len(x) < 3:
+        return  # not enough points for a stable KDE
+
+    try:
+        kde = gaussian_kde(np.vstack([x, y]))
+    except np.linalg.LinAlgError:
+        return  # degenerate/collinear points
+
+    xx, yy = np.meshgrid(
+        np.linspace(xlim[0], xlim[1], grid_size),
+        np.linspace(ylim[0], ylim[1], grid_size)
+    )
+    zz = kde(np.vstack([xx.ravel(), yy.ravel()])).reshape(xx.shape)
+
+    zz_norm = zz / zz.max()
+
+    # thresh cuts off the lowest-density contour band, like sns.kdeplot(thresh=...)
+    contour_levels = np.linspace(thresh, 1, levels)
+
+    ax.contourf(xx, yy, zz_norm, levels=contour_levels, zdir=zdir, offset=offset,
+                colors=[color], alpha=alpha)
+
+
+def _lighten_color(color, amount=0.5):
+    r, g, b, a = color
+    r = r + (1 - r) * amount
+    g = g + (1 - g) * amount
+    b = b + (1 - b) * amount
+    return (r, g, b, a)
+
+
+def plot_subspace_batch(all_hidden_reduced, all_labels, all_batch_size, title=None, ax=None,
+                         data_label=None, elev=20, azim=45, cmaps=None,
+                         show_projections=True, projection_alpha=0.15, projection_lighten=0.5,
+                         show_legend=True, explained_variance=None):
     if ax is None:
         fg, ax = plt.subplots(figsize=(6, 6), subplot_kw={'projection': '3d'})
 
     if title is not None:
-        ax.set_title(title, fontsize=12)
+        ax.set_title(title, fontsize=20)
 
     if cmaps is None:
-        cmaps = [plt.cm.RdPu, plt.cm.Oranges, plt.cm.Reds, plt.cm.Blues, plt.cm.Greens, plt.cm.Purples]
+        cmaps = [plt.cm.Greens, plt.cm.Reds]
 
-    unique_counts = Counter(all_labels)
-    data_phase = sorted(list(unique_counts.keys()))
-    color_mapping = {label: index for index, label in enumerate(data_phase)}
+    xlim = (-0.8, 0.8)
+    ylim = (-0.8, 0.8)
+    zlim = (-0.8, 0.8)
+                             
+    dataset_totals = Counter(dataset_idx for dataset_idx, _ in all_labels)
+    shade_lookup = {
+        dataset_idx: np.linspace(0.3, 1, max(count, 1))
+        for dataset_idx, count in dataset_totals.items()
+    }
+    running_idx = {dataset_idx: 0 for dataset_idx in dataset_totals}
 
-    def get_color(dataset_idx, phase_name, batch_index, data_color = None):
-        if data_color is None:
-            cmap = cmaps[color_mapping[(dataset_idx, phase_name)] % len(cmaps)]
-        else:
-            cmap = data_color
-        phase_shades = np.linspace(0.3, 1, max(unique_counts[(dataset_idx, phase_name)], 1))
-        shade = phase_shades[batch_index]
-        return cmap(shade)
-
+    phase_shades = {}
     offset = 0
-    pre_data, pre_phase = None, None
-    i_data_phase = 0
-    for i, (batch_size, (dataset_idx, phase_name)) in enumerate(zip(all_batch_size, all_labels)):
-        if pre_data == dataset_idx and pre_phase == phase_name:
-            i_data_phase += 1
-        else:
-            i_data_phase = 0
+
+    for batch_size, (dataset_idx, phase_name) in zip(all_batch_size, all_labels):
+        seq_idx = running_idx[dataset_idx]
+        shade = shade_lookup[dataset_idx][seq_idx]
+        running_idx[dataset_idx] = seq_idx + 1
+
+        color = cmaps[dataset_idx](shade)
+        proj_color = _lighten_color(color, amount=projection_lighten)
+        phase_shades.setdefault((dataset_idx, phase_name), []).append(shade)
         plot_data = all_hidden_reduced[offset: offset + batch_size, :]
-        color = get_color(dataset_idx, phase_name, i_data_phase, data_color)
-        if data_label is not None:
-            label = f'{data_label[dataset_idx]} - {phase_name}'
-        else:
-            label = f'Dataset {dataset_idx} – {phase_name}'
+        
         ax.scatter(plot_data[:, 0], plot_data[:, 1], plot_data[:, 2],
-                   marker='o', s=20, color=color,
-                   label=label if i_data_phase == (unique_counts[(dataset_idx, phase_name)] // 2) else None)
+                   marker='o', s=20, color=color)
+
+        if show_projections:
+            # Floor
+            ax.scatter(plot_data[:, 0], plot_data[:, 1], zlim[0],
+                       marker='o', s=20, color=proj_color, alpha=projection_alpha, zdir='z')
+            # Back wall
+            ax.scatter(plot_data[:, 0], plot_data[:, 2], ylim[0],
+                       marker='o', s=20, color=proj_color, alpha=projection_alpha, zdir='y')
+            # Side wall
+            ax.scatter(plot_data[:, 1], plot_data[:, 2], xlim[0],
+                       marker='o', s=20, color=proj_color, alpha=projection_alpha, zdir='x')
+
         offset += batch_size
-        pre_data, pre_phase = dataset_idx, phase_name
 
+    if show_legend:
+        legend_handles = []
+        seen_order = list(dict.fromkeys(all_labels))  # preserve first-seen order
+        for dataset_idx, phase_name in seen_order:
+            avg_shade = np.mean(phase_shades[(dataset_idx, phase_name)])
+            color = cmaps[dataset_idx](avg_shade)
+            if data_label is not None:
+                label = f'{data_label[dataset_idx]} - {phase_name}'
+            else:
+                label = f'Dataset {dataset_idx} - {phase_name}'
+            legend_handles.append(Line2D([0], [0], marker='o', color='w',
+                                          markerfacecolor=color, markersize=8, label=label))
+        ax.legend(handles=legend_handles, loc='upper left', fontsize=15)
 
-    ax.set_xlabel('Component 1')
-    ax.set_ylabel('Component 2')
-    ax.set_zlabel('Component 3')
-    ax.set_xlim(-0.8, 0.8)
-    ax.set_ylim(-0.8, 0.8)
-    ax.set_zlim(-0.8, 0.8)
-    ax.view_init(elev=elev, azim=azim)
-    ax.legend(loc='upper left', fontsize=12)
+    if explained_variance is not None:
+        ax.set_xlabel(f'Comp. 1 ({explained_variance[0] * 100:.1f}%)', fontsize=15)
+        ax.set_ylabel(f'Comp. 2 ({explained_variance[1] * 100:.1f}%)', fontsize=15)
+        ax.set_zlabel(f'Comp. 3 ({explained_variance[2] * 100:.1f}%)', fontsize=15)
+    else:
+        ax.set_xlabel('Component 1', fontsize=15)
+        ax.set_ylabel('Component 2', fontsize=15)
+        ax.set_zlabel('Component 3', fontsize=15)
+    
+    ax.set_xlim(xlim)
+    ax.set_ylim(ylim)
+    ax.set_zlim(zlim)
+    ax.view_init(elev=elev, azim=azim)    
+
 
 
 
 # Plot distance matrix (used for neural activity analysis)
-def plot_distance_matrix(distance_matrix, ordered_keys, data_label=None, title=None, ax=None):
+def plot_distance_matrix(distance_matrix, ordered_keys, data_label=None, title=None, ax=None, colorbar_show=True, max_value = None, ylabel_flag = True):
 
     if ax is None:
         fig, ax = plt.subplots(figsize=(8, 8))
 
-    distance_matrix_norm = distance_matrix / distance_matrix.max()
+    if max_value is None:
+        distance_matrix_norm = distance_matrix / distance_matrix.max()
+    else:
+        distance_matrix_norm = distance_matrix / max_value
+
     im = ax.imshow(distance_matrix_norm, cmap='viridis', vmin=0, vmax=1)
-    ax.figure.colorbar(im, ax=ax)
+    
+    if colorbar_show:
+        ax.figure.colorbar(im, ax=ax)
+
 
     groups = {}
     for i, (ds, phase, b) in enumerate(ordered_keys):
@@ -328,7 +474,10 @@ def plot_distance_matrix(distance_matrix, ordered_keys, data_label=None, title=N
     ax.set_xticks(group_centers)
     ax.set_yticks(group_centers)
     ax.set_xticklabels(group_labels, fontsize=10, rotation=90)
-    ax.set_yticklabels(group_labels, fontsize=10)
+    if ylabel_flag:
+        ax.set_yticklabels(group_labels, fontsize=10)
+    else:
+        ax.set_yticklabels([])
 
     phase_boundaries = []
     current_phase = None
@@ -343,15 +492,93 @@ def plot_distance_matrix(distance_matrix, ordered_keys, data_label=None, title=N
         ax.axvline(boundary - 0.5, color='white', linewidth=1.5)
 
     if title:
-        ax.set_title(title, fontsize=12)
+        ax.set_title(title, fontsize=14)
+
+    return im
+
+        ax.set_title(title, fontsize=14)
+
+    return im
 
 
+
+def plot_ridge_matrix(score_matrix, ordered_keys, title=None, ax=None,
+                       colorbar_show=True, vmin=None, vmax=None, cmap='viridis'):
+
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(8, 8))
+
+    im = ax.imshow(score_matrix, cmap='RdBu', vmin=vmin, vmax=vmax)
+    if colorbar_show:
+        ax.figure.colorbar(im, ax=ax)
+
+    # group by phase (analogous to grouping by (ds, phase) in the original)
+    groups = {}
+    for i, (phase, batch) in enumerate(ordered_keys):
+        groups.setdefault(phase, []).append(i)
+
+    group_centers = []
+    group_labels = []
+    for phase, indices in groups.items():
+        group_centers.append(np.mean(indices))
+        group_labels.append(phase)
+
+    ax.set_xticks(group_centers)
+    ax.set_yticks(group_centers)
+    ax.set_xticklabels(group_labels, fontsize=10)
+    ax.set_yticklabels(group_labels, fontsize=10)
+
+    phase_boundaries = []
+    current_phase = None
+    for i, (phase, _) in enumerate(ordered_keys):
+        if phase != current_phase:
+            if current_phase is not None:
+                phase_boundaries.append(i)
+            current_phase = phase
+
+    for boundary in phase_boundaries:
+        ax.axhline(boundary - 0.5, color='white', linewidth=1.5)
+        ax.axvline(boundary - 0.5, color='white', linewidth=1.5)
+
+    if title:
+        ax.set_title(title, fontsize=20)
+
+    return im
+
+
+# Plot neural activity as a heatmap: y = neurons, x = time
+def plot_neural_heatmap(hidden, title=None, batch_ind=0, ax=None, cmap='viridis'):
+    to_plot = 150
+    hidden_np = np.squeeze(hidden.detach().cpu().numpy()[batch_ind, :to_plot, :])  # (time, neurons)
+
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(5,5))
+
+    im = ax.imshow(hidden_np.T, aspect='auto', origin='lower', cmap=cmap, extent=[0, hidden_np.shape[0]/100, 0, hidden_np.shape[1]])
+
+    ax.set_xlabel('Time [s]', fontsize=14)
+    ax.set_ylabel('Neuron', fontsize=14)
+    ax.set_xticks([0,1.5])
+    ax.set_yticks([0,250])
+    ax.tick_params(axis='both', labelsize=14)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+
+    cbar = ax.figure.colorbar(im, ax=ax)
+    cbar.set_label('Activity [a.u.]', fontsize=14)
+    cbar.ax.tick_params(labelsize=14)
+
+    if title:
+        ax.set_title(title, fontsize=16)
+
+    plt.show()
+    return im
 
 
 
 # The following are helpful for looking at individual network, phase or batch performance
 if __name__ == "__main__":
-    saveLoc = '/Users/pounemirzazadeh/Motornet/MultiNet/Modular_version/'
+    saveLoc = '/Users/pounemirzazadeh/Motornet/MultiNet/Modular_version'
 
     exp_names = ['center_out']      # 'center_out', 'mov_diff_loc', 'pro_loc', 'vis_loc'
     phases = ['NF1', 'FF1', 'NF2']
@@ -383,7 +610,7 @@ if __name__ == "__main__":
                     endpoint_tensor = th.cat(endpoint_list).flatten()
                     batch_list = sorted(dev_data[phase].keys(), key=lambda x: int(x))
                     batch_list_ints = [int(b) for b in batch_list]
-                    # Training deviations at the batch numbers we have saved to reconstruct during the testing.
+                    # Training deviations at the batch numbers we have saved to reconstruct during testing.
                     train_lateral_all = results[phase]['lateral_dev']
                     train_endpoint_all = results[phase]['endpoint_dev']
                     train_lateral_at_checkpoints = []
@@ -394,7 +621,8 @@ if __name__ == "__main__":
                     plot_subspace_ind(data = test_data[phase][last_batch], t_before_go=10, title=f"Activity, Network = {net_id}, Exp = {exp}, Phase = {phase}, Force_Field = {force_field}")
                     plot_deviation(lateral_tensor, endpoint_tensor, title=f"Test Deviation, Network = {net_id}, Exp = {exp}, Phase = {phase}", batch_values=batch_list)
                     plot_deviation(train_lateral_at_checkpoints, train_endpoint_at_checkpoints, title=f"Train Deviation, Network = {net_id}, Exp = {exp}, Phase = {phase}", batch_values=batch_list)
-                    plot_motion(batch = first_batch, episode_data = test_data[phase][first_batch],
-                                title=f"Network = {net_id}, Exp = {exp}, Phase = {phase}, Force_Field = {force_field}, batch = {first_batch}", plot_from=30, plot_to=150)
+                    plot_motion(batch=first_batch, episode_data=test_data[phase][first_batch],
+                                title=f"{phase}, first batch", plot_from=0, plot_to=150)
                     plot_motion(batch=last_batch, episode_data=test_data[phase][last_batch],
-                                title=f"Network = {net_id}, Exp = {exp}, Phase = {phase}, Force_Field = {force_field}, batch = {last_batch}",  plot_from=30, plot_to=150)
+                                title=f"{phase}, last batch", plot_from=0, plot_to=150)
+                    plot_neural_heatmap(test_data[phase][last_batch]['hidden'], title=f"Hidden Neural Activity")
