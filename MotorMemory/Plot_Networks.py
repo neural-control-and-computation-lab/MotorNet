@@ -7,14 +7,14 @@ from Plots import plot_subspace_batch, plot_distance_matrix
 
 plotor = mn.plotor.plot_pos_over_time
 
-exp_names = ['center_out','mov_diff_loc','pro_loc','vis_loc']
+exp_names = ['center_out','mov_diff_loc','vis_loc','pro_loc']
 phases = ['NF1','FF1','NF2']
 measures = ['endpoint', 'lateral']
 num_nets = 20
 
 
 training_sets = {
-    "set1": "/Users/pounemirzazadeh/Motornet/MultiNet/Modular_version",
+        "set1": "/Users/pounemirzazadeh/Motornet/MultiNet/Modular_version/complete_test/",
 }
 saveLoc = training_sets["set1"]
 
@@ -25,10 +25,11 @@ purtb_group = {
 
 
 plot_table = {
-    'center_out': {'num': '2', 'color': 'blue'},
-    'vis_loc': {'num': '7', 'color': 'orange'},
-    'pro_loc': {'num': '8', 'color': 'green'},
-    'mov_diff_loc': {'num': '3', 'color': 'red'}
+    'center_out': {'num': '2', 'color': 'blue', 'label':'Exp 1'},
+    'vis_loc': {'num': '7', 'color': 'orange', 'label':'Exp 3'},
+    'pro_loc': {'num': '8', 'color': 'green', 'label':'Exp 4'},
+    'mov_diff_loc': {'num': '3', 'color': 'red', 'label':'Exp 2'}
+
 }
 
 
@@ -51,7 +52,7 @@ all_trajectory = {s_name: {d_name: summarize_trajectory(path, param["suffix"],ph
 # Plot losses for each phase and each experiments across networks
 
 # Growing up loss plot
-fig, ax1 = plt.subplots(figsize=(6, 4))
+fig, ax1 = plt.subplots(figsize=(5, 5))
 
 path = training_sets["set1"]
 growing_up_loss = []
@@ -65,13 +66,17 @@ mean_values = np.array(growing_up_loss).mean(axis=0).squeeze()
 std_values = np.array(growing_up_loss).std(axis=0).squeeze()
 epochs = np.arange(len(mean_values))
 
-ax1.plot(epochs, mean_values, color='blue', linewidth=2)
-ax1.fill_between(epochs, mean_values - std_values, mean_values + std_values, alpha=0.3, color='steelblue')
+ax1.plot(epochs, mean_values, color='blue', linewidth=2, label=f'Mean ({num_nets} networks)')
+ax1.fill_between(epochs, mean_values - std_values, mean_values + std_values, alpha=0.3, color='steelblue', label='± SD across networks')
 
-ax1.set_title(f'Training Losses across {num_nets} networks - growing_up', fontsize=12)
-ax1.set_xlabel('Batch')
-ax1.set_ylabel('Loss')
+ax1.set_title(f'Random reaching', fontsize=16)
+ax1.set_xlabel('Batch', fontsize=14)
+ax1.set_ylabel('Training Loss', fontsize=14)
 #ax1.set_ylim(15, 40)
+ax1.spines["top"].set_visible(False)
+ax1.spines["right"].set_visible(False)
+ax1.tick_params(axis='both', labelsize=14)
+ax1.legend(fontsize=12, frameon=False)
 
 fig.tight_layout()
 plt.show()
@@ -152,11 +157,11 @@ for i, exp in enumerate(exp_names):
                 for t_id in range(num_nets):
                     color_index = t_id + (s_idx * num_nets)
                     c = current_cmap[color_index]
-                    vals = [curr_sum[b]['lateral']['concat'][t_id].item() for b in batch_ids]
+                    vals = [curr_sum[b]['lateral_all']['concat_only_net'][t_id].item() for b in batch_ids]
                     ax.plot(batch_ids, vals, color=c, alpha=0.7, linewidth=1)
 
                 for b in batch_ids:
-                    data_pool[b].append(curr_sum[b]['lateral']['concat'])
+                    data_pool[b].append(curr_sum[b]['lateral_all']['concat_only_net'])
 
         means, stds = [], []
         sorted_batches = sorted(data_pool.keys(), key=lambda x: int(x))
@@ -197,8 +202,11 @@ for i, phase in enumerate(phases):
     for j, exp in enumerate(exp_names):
         mean_values = mean_summary[exp][phase]
         batch_values = batch_summary[exp][phase]
+        std_values = std_summary[exp][phase]
 
         ax.plot(batch_values, mean_values, label=exp, color=plot_table[exp]['color'])
+        ax.fill_between(batch_values, np.array(mean_values) - np.array(std_values), np.array(mean_values) + np.array(std_values),
+                        color='gray', alpha=0.15, label="STD" if i == 0 else "")
 
     ax.set_title(f"Phase: {phase}")
     ax.set_xlabel("Batch")
@@ -211,11 +219,77 @@ for i, phase in enumerate(phases):
 plt.tight_layout()
 plt.show()
 
+fig, ax = plt.subplots(figsize=(7, 7))
+
+N_NF1_KEEP = 100
+
+break_drawn = False
+ax.axhline(0, color="black", linestyle="--", linewidth=1.5, zorder=1)
+
+for j, exp in enumerate(exp_names):
+    offset = 0
+    for i, phase in enumerate(phases):
+        mean_values = np.array(mean_summary[exp][phase])
+        batch_values = batch_summary[exp][phase]
+
+        if phase == 'NF1':
+            mean_values = mean_values[-N_NF1_KEEP:]
+            batch_values = batch_values[-N_NF1_KEEP:]
+            print(batch_values)
+
+        x_shifted = np.array(batch_values, dtype=int) - int(batch_values[0]) + offset
+
+        ax.plot(x_shifted, mean_values,
+                label=plot_table[exp]['label'] if phase == 'NF1' else "",
+                color=plot_table[exp]['color'],zorder=2, linewidth=2)
+
+
+
+        if phase == 'NF1':
+            ax.text(
+                (x_shifted[-2] +x_shifted[-1]) / 2, 0.06, phase,
+                ha="center", va="center", fontsize=14, color = 'black'
+            )
+        else:
+            ax.text(
+                (x_shifted[0] + x_shifted[-1]) / 2, 0.06, phase,
+                ha="center", va="center", fontsize=14, color='black'
+            )
+        if phase == 'FF1':
+            ax.plot(x_shifted[-1], mean_values[-1], marker="s", color=plot_table[exp]['color'],
+                    markersize=5, markeredgecolor="black", markeredgewidth=1, zorder=3)
+            ax.axvspan(x_shifted[0], x_shifted[-1], color="whitesmoke", zorder=0)
+            ax.text(
+                (x_shifted[0] + x_shifted[-1]) / 2, 0.045, "Exposure",
+                ha="center", va="center", fontsize=12, color='dimgray'
+            )
+        if phase == 'NF2':
+            ax.plot(x_shifted[0], mean_values[0], marker="s", color=plot_table[exp]['color'],
+                    markersize=5, markeredgecolor="black", markeredgewidth=1, zorder=3)
+
+        offset = x_shifted[-1] + 1
+
+ax.set_xlabel("Batch", fontsize=14)
+ax.set_xlim(430,650)
+ax.set_xticks([450, 500, 600, 650])
+ax.set_ylabel("Lateral Deviation", fontsize=14)
+ax.spines["top"].set_visible(False)
+ax.spines["right"].set_visible(False)
+ax.tick_params(axis="both", labelsize=14, width=1.5, length=6)
+for spine in ("left", "bottom"):
+    ax.spines[spine].set_linewidth(1.5)
+ax.legend(fontsize=10, frameon=False, loc="upper right")
+
+plt.tight_layout()
+plt.show()
+
+
+
 
 # Plot summary at the end of FF1 and beginning of NF2 for each experiment across networks.
 plot_phases = [('FF1', -1), ('NF2', 0)]
 
-fig, axs = plt.subplots(1, 2, figsize=(6, 5), sharey=True)
+fig, axs = plt.subplots(1, 2, figsize=(4, 3), sharey=True)
 
 for i, (phase_name, b_idx) in enumerate(plot_phases):
     ax = axs[i]
@@ -226,22 +300,37 @@ for i, (phase_name, b_idx) in enumerate(plot_phases):
                 summary = all_data[set_name][dir_name][exp][phase_name]
                 b_ids = sorted(summary.keys(), key=lambda x: int(x))
                 target_b = b_ids[b_idx]
-                all_points.append(summary[target_b]['lateral']['concat'])
+                all_points.append(summary[target_b]['lateral_all']['concat_only_net'])
 
         combined = th.cat(all_points)
         m, s = combined.mean().item(), combined.std().item()/ np.sqrt(combined.numel())
 
         c = plot_table[exp]['color']
-        ax.scatter(j, m, color=c, s=50, label=exp if i == 0 else "")
-        ax.errorbar(j, m, yerr=s, color=c, capsize=6, lw=2)
+        ax.scatter(j, m, color=c, s=20, label=exp if i == 0 else "")
+        ax.errorbar(j, m, yerr=s, color=c, capsize=4, lw=2)
 
-    ax.set_xticks(range(len(plot_table)))
-    ax.set_xticklabels([v['num'] for v in plot_table.values()])
-    ax.set_title(f"{phase_name}")
-    ax.grid(True, axis='y', alpha=0.3)
-    ax.set_ylim(-0.05, 0.05)
+    # ax.set_xticks(range(len(plot_table)))
+    # ax.set_xticklabels([v['num'] for v in plot_table.values()])
+    ax.set_title(f"{phase_name}",  fontsize=12)
+    # ax.grid(True, axis='y', alpha=0.3)
+    ax.set_xlim(-0.5,len(exp_names))
+    if phase_name == 'FF1':
+        ax.set_title("Final Exposure")
+        ax.set_ylim(0, 0.04)
+        ax.set_yticks([0, 0.04])
+        ax.axvspan(-0.5, len(exp_names), color="whitesmoke", zorder=0)
+    elif phase_name == 'NF2':
+        ax.set_title("Post-exposure")
+        ax.set_ylim(-0.04, 0.005)
+        ax.set_yticks([-0.04,0])
+        ax.axhline(0, color="black", linestyle="--", linewidth=0.5, zorder=1)
 
-axs[0].legend(loc='upper right')
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.set_xticks([])
+    ax.set_xlabel("Experiment", fontsize=10)
+    ax.tick_params(axis="both", labelsize=12)
+
 plt.tight_layout()
 plt.show()
 
