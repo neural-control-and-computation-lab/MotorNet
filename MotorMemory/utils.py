@@ -44,6 +44,44 @@ def applied_load(endpoint_vel, k, mode = 'CW'):
 
     return force_field
 
+def applied_channel_force(vel, pos, init, goal, k = 150, b = 0.5):
+    line_vec = goal - init                                    # (batch, 2)
+    inv_norm2 = 1.0 / (th.sum(line_vec**2, dim=-1, keepdim=True) + 1e-8)
+
+    def perp(v):
+        proj = line_vec * th.sum(line_vec * v, dim=-1, keepdim=True) * inv_norm2
+        return v - proj
+
+    err   = perp(pos - init)     # lateral position deviation
+    err_d = perp(vel)            # lateral velocity
+
+    return -(k * err + b * err_d)
+
+
+def applied_external_load(task, info, target, time_step, curl_gain, chan_k, chan_b, force_mask, mode='CW', is_channel=None):
+    # pos = info["states"]["cartesian"][:, :2]
+    # pos_shift_adj = task.shift_traj(pos)
+    # vel = info["states"]["cartesian"][:, 2:]
+    xy = info["states"]["cartesian"]
+    xy_shift_adj = task.shift_traj(xy)
+    pos = xy_shift_adj[:, :2]
+    vel = xy_shift_adj[:, 2:]
+    load = th.zeros_like(vel)
+
+    init = target[:,0,:2]
+    goal = target[:,time_step,:2]
+
+
+    if is_channel is None:
+        is_channel = th.zeros(vel.shape[0], dtype=th.bool, device=vel.device)
+    m = is_channel[:, None].float()
+
+    curl = applied_load(vel, curl_gain, mode)
+    wall = applied_channel_force(vel, pos, init, goal, chan_k, chan_b)
+
+    return load + ((1 - m) * curl + m * wall) * force_mask, wall * force_mask
+
+
 
 # The next two functions are for comparing output weights between two different phases
 def eval_weights(saveLoc, phase, exp, batch_number):
