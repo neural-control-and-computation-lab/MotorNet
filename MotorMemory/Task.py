@@ -99,7 +99,7 @@ class ExpTask:
             delay_range = [0.2, 0.8]
             catch_chance = 0.25 # catch trials with no go cue are useful to prevent the network from anticipating the go cue
             init_states = self.effector.draw_random_uniform_states(batch_size).detach().cpu().numpy() # random initial state
-            start_states = init_states
+            # start_states = init_states
             self.exp_type = 'random_target'
             # Per-TRIAL random visual offsets so each trial in a batch independently
             # gets its own shift (or no shift). Forces the network to keep cue-detection
@@ -109,7 +109,9 @@ class ExpTask:
             sx = np.random.uniform(-0.1, 0.1, size=batch_size).astype(np.float32) * has_shift
             sy = np.random.uniform(-0.05, 0.05, size=batch_size).astype(np.float32) * has_shift
             zeros = np.zeros(batch_size, dtype=np.float32)
-            self.movement_array = th.tensor(np.stack([sx, sy, zeros, zeros], axis=1))
+            shift_array = np.stack([sx, sy, zeros, zeros], axis=1)
+            shifted_base_joint = self.shift_joints(init_states, shift_array=shift_array)
+            start_states = np.repeat(np.expand_dims(shifted_base_joint, axis=0), batch_size, axis=0)
             self.shift = True
 
         # Create inputs and targets for all individual trials in the batch
@@ -126,7 +128,7 @@ class ExpTask:
             if self.exp_type == 'center_out':
                 targets[i, :, :] = np.tile(np.expand_dims(start_point + circular_offset[:, i % self.circular_target_num].T, axis=1),(1, n_timesteps, 1))
             else:
-                targets[i, :, :] = np.tile(np.expand_dims(self.effector.joint2cartesian(self.effector.draw_random_uniform_states(1)).detach().cpu().numpy(),axis=1), (1, n_timesteps, 1))
+                targets[i, :, :] = np.tile(np.expand_dims(self.effector.joint2cartesian(self.effector.draw_random_uniform_states(1)).detach().cpu().numpy(),axis=1) + self.movement_array.detach().cpu().numpy() , (1, n_timesteps, 1))
 
             inputs[i, :, 0:2] = targets[i, -1, 0:2]
             # Go cue
@@ -146,7 +148,11 @@ class ExpTask:
     def shift_joints(self, base_joint, shift_array= [0.1, 0, 0, 0]):
         base_cartesian = self.effector.joint2cartesian(th.tensor(base_joint, dtype=th.float32))
         shift_tensor = th.tensor([0.1, 0, 0, 0], dtype=th.float32)
-        if self.cue == 'right':
+        if self.exp_type == 'random_target':
+            shift_tensor = th.tensor(shift_array, dtype=th.float32)
+            shifted_cartesian = base_cartesian + shift_tensor
+            self.movement_array = shift_tensor
+        elif self.cue == 'right':
             shifted_cartesian = base_cartesian + shift_tensor
             self.movement_array = th.tensor(shift_array, dtype=th.float32)
         elif self.cue == 'left':
@@ -176,11 +182,15 @@ class ExpTask:
 
     def shift_traj(self, xy):
         if self.shift:
-            ma = self.movement_array
-            if ma.ndim == 1:
-                xy = xy - ma                     # broadcast (4,) over (batch, time, 4)
-            else:
-                xy = xy - ma.unsqueeze(1)         # (batch, 1, 4) broadcasts over time
+            if xy.ndim in [1,2]:
+                shift_xy = self.movement_array
+                xy = xy - shift_xy
+            else
+                shift_xy = self.movement_array
+                if shift_xy.ndim == 2:
+                    xy = xy - shift_xy[:, None, :]
+                elif shift_xy.ndim == 1:
+                    xy = xy - shift_xy[None, None, :]
         return xy
 
 
