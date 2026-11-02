@@ -24,8 +24,9 @@ class ExpConfig:
         self.dt = 0.01
         self.ep_dur = 2.0
         self.device = th.device("cpu")
-        self.saveLoc = f"/Users/pounemirzazadeh/Motornet/MultiNet/Modular_version/new_test/task_{net_id}/"
+        self.saveLoc = f"/Users/pounemirzazadeh/Motornet/MultiNet/Modular_version/channel_test/task_{net_id}/"
         os.makedirs(self.saveLoc, exist_ok=True)
+        self.is_channel = None
         # Configuration for phases:
         if self.mode == 'baseline':
             self._setup_baseline()
@@ -33,6 +34,8 @@ class ExpConfig:
             self._setup_training()
         elif self.mode == 'baseline_test':
             self._setup_baseline_testing()
+        elif self.mode == 'channel_test_mask':
+            self._setup_channel_testing()
         else:
             self._setup_testing()
 
@@ -58,21 +61,30 @@ class ExpConfig:
     def _setup_training(self):
         self.batch_size = 32
         self.phases = ['NF1', 'FF1', 'NF2']
-        self.k_values = [0,12,0]
+        self.k_values = [0,13,0]
         self.n_batches = [500,100,50]#[700,70,50]
         self.load_baseline = [True, False, False]   # This is useful for the phases needing growing up weights
         self.run_modes = [f"{self.mode}_{self.exp}"]*3
         self.exp_save_names = [f"{self.exp}"]*3
 
-
     def _setup_testing(self):
         self.batch_size = 128
         self.phases = ['NF1', 'FF1', 'NF2']
-        self.k_values = [0, 12, 0]
+        self.k_values = [0, 13, 0]
         self.n_batches = [1, 1, 1]
         self.run_modes = [f"{self.mode}_{self.exp}"]*3
         self.contextual_cues = ['left','right']
         self.force_fields = ['CCW','CW']
+
+    def _setup_channel_testing(self):
+        self.batch_size = 128
+        self.phases = ['NF1', 'FF1', 'NF2']
+        self.k_values = [0, 0, 0]
+        self.n_batches = [1, 1, 1]
+        self.run_modes = [f"test_{self.exp}"]*3
+        self.contextual_cues = ['left','right']
+        self.force_fields = ['CCW','CW']
+        self.is_channel = th.ones(self.batch_size, dtype=th.bool)
 
 
 
@@ -162,16 +174,19 @@ def run_testing(env, task, cfg):
                 deviations[phase][batch_number] = {}
                 policy.load_state_dict(weights[batch_number])
 
-                testdata, endpoint_dev, lateral_dev = test_batches(env=env, task=task, policy=policy, n_batches=n_batch, batch_size=cfg.batch_size, interval=1,
+                testdata, endpoint_dev, lateral_dev, endpoint_dev_batches, lateral_dev_batches = test_batches(env=env, task=task, policy=policy, n_batches=n_batch, batch_size=cfg.batch_size, interval=1,
                                         ep_dur=cfg.ep_dur, device=cfg.device, run_mode=run_mode,
                                         simulation_mode=cfg.mode, force_field=force_field, contextual_cue=contextual_cue,
-                                        k=k_value, title=f'{cfg.exp} - {phase} - {cfg.net_id} - batch = {batch_number}')
+                                        k=k_value, is_channel = cfg.is_channel, title=f'{cfg.exp} - {phase} - {cfg.net_id} - batch = {batch_number}')
                 test_data[phase][batch_number] = testdata
                 deviations[phase][batch_number]['lateral'] = lateral_dev
                 deviations[phase][batch_number]['endpoint'] = endpoint_dev
+                deviations[phase][batch_number]['lateral_all'] = lateral_dev_batches
+                deviations[phase][batch_number]['endpoint_all'] = endpoint_dev_batches
 
-        th.save(test_data, cfg.saveLoc + f"test_data_{cfg.exp}_{force_field}")
-        th.save(deviations, cfg.saveLoc + f"deviations_{cfg.exp}_{force_field}")
+        suffix = '_channel' if cfg.is_channel is not None else ''
+        th.save(test_data, cfg.saveLoc + f"test_data_{cfg.exp}_{force_field}{suffix}")
+        th.save(deviations, cfg.saveLoc + f"deviations_{cfg.exp}_{force_field}{suffix}")
 
 
 
@@ -183,7 +198,7 @@ def exp_simulation(net_id = 1, mode='test', exp='center_out'):
 
     if mode == 'train' or mode == 'baseline':
         run_training(env = env, task = task, cfg = cfg)
-    elif mode == 'test' or mode == 'baseline_test':
+    elif mode == 'test' or mode == 'baseline_test' or mode == 'channel_test_mask':
         run_testing(env = env, task = task, cfg = cfg)
 
 
