@@ -14,7 +14,7 @@ num_nets = 20
 
 
 training_sets = {
-        "set1": "/Users/pounemirzazadeh/Motornet/MultiNet/Modular_version/complete_test/",
+        "set1": "/Users/pounemirzazadeh/Motornet/MultiNet/Modular_version/channel_test/",
 }
 saveLoc = training_sets["set1"]
 
@@ -289,7 +289,7 @@ plt.show()
 # Plot summary at the end of FF1 and beginning of NF2 for each experiment across networks.
 plot_phases = [('FF1', -1), ('NF2', 0)]
 
-fig, axs = plt.subplots(1, 2, figsize=(4, 3), sharey=True)
+fig, axs = plt.subplots(1, 2, figsize=(4, 3))
 
 for i, (phase_name, b_idx) in enumerate(plot_phases):
     ax = axs[i]
