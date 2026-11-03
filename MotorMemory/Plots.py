@@ -496,9 +496,6 @@ def plot_distance_matrix(distance_matrix, ordered_keys, data_label=None, title=N
 
     return im
 
-        ax.set_title(title, fontsize=14)
-
-    return im
 
 
 
