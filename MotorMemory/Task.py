@@ -185,7 +185,7 @@ class ExpTask:
             if xy.ndim in [1,2]:
                 shift_xy = self.movement_array
                 xy = xy - shift_xy
-            else
+            else:
                 shift_xy = self.movement_array
                 if shift_xy.ndim == 2:
                     xy = xy - shift_xy[:, None, :]
