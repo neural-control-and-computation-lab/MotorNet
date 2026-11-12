@@ -24,7 +24,7 @@ class ExpConfig:
         self.dt = 0.01
         self.ep_dur = 2.0
         self.device = th.device("cpu")
-        self.saveLoc = f"/Users/pounemirzazadeh/Motornet/MultiNet/Modular_version/channel_test/task_{net_id}/"
+        self.saveLoc = f"/Users/pounemirzazadeh/Motornet/MultiNet/Force_version/test_no_shift_gu/task_{net_id}/"
         os.makedirs(self.saveLoc, exist_ok=True)
         self.is_channel = None
         # Configuration for phases:
@@ -43,7 +43,7 @@ class ExpConfig:
         self.batch_size = 32
         self.phases = ['growing_up']
         self.k_values = [0]
-        self.n_batches = [5000]
+        self.n_batches = [2000]
         self.load_baseline = [False]
         self.run_modes = ["train_rand"]
         self.exp_save_names = ["baseline"]
@@ -205,9 +205,8 @@ def exp_simulation(net_id = 1, mode='test', exp='center_out'):
 if __name__ == "__main__":
 
     num_networks = 4 # Number of networks/subjects
-    mode = ('test')  # Set to 'train' to run the learning loop and 'test' to run the test loop
+    mode = 'test'  # Set to 'train' to run the learning loop and 'test' to run the test loop
     experiments = ['center_out','mov_diff_loc', 'pro_loc','vis_loc']
-
 
     if mode == 'train':
         Parallel(n_jobs=num_networks)(
