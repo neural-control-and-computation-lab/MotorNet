@@ -14,7 +14,7 @@ num_nets = 20
 
 
 training_sets = {
-        "set1": "/Users/pounemirzazadeh/Motornet/MultiNet/Modular_version/channel_test/",
+        "set1": "/Users/pounemirzazadeh/Motornet/MultiNet/Force_version/test_no_shift_gu",
 }
 saveLoc = training_sets["set1"]
 
@@ -427,7 +427,7 @@ for ind, exp in enumerate(exp_names):
     data_CCW = th.load(path_CCW)
     data_CCW = {k: data_CCW[k] for k in plot_phases}
 
-    all_hidden_reduced_both, all_labels_both, all_batch_size_both = calculate_subspace(
+    all_hidden_reduced_both, all_labels_both, all_batch_size_both, explained_var, all_hidden = calculate_subspace(
         data=[data_CW, data_CCW],
         t_before_go=t_before_go_plot
     )
@@ -442,7 +442,7 @@ for ind, exp in enumerate(exp_names):
             data_label=['CW', 'CCW'],
             elev=elev,
             azim=azim,
-            cmaps=[plt.cm.Oranges, plt.cm.Reds, plt.cm.Blues, plt.cm.Purples]
+            cmaps=[plt.cm.Oranges, plt.cm.Greens, plt.cm.Blues, plt.cm.Purples]
         )
 
     axes_grid[ind, 0].set_ylabel(exp, fontsize=12)
@@ -454,15 +454,15 @@ plt.show()
 
 # plot distance matrices
 
+plot_phases = ['NF1', 'FF1', 'NF2']
+
 RDM_matrix = {exp: [] for exp in exp_names}
 ordered_keys = None
+data_CW = {}
+data_CCW = {}
 
 for set_name, set_path in training_sets.items():
     for net_id in range(num_nets):
-
-        # The commented lines are for plotting distance matrices for all individual networks
-        #fig_rdm, axes_rdm = plt.subplots(1, len(exp_names), figsize=(6 * len(exp_names), 8))
-        #fig_rdm.suptitle(f'Network = {net_id}, t = {t_before_go_plot}', fontsize=20)
 
         for exp in exp_names:
         #for ax, exp in zip(axes_rdm, exp_names):
@@ -472,35 +472,30 @@ for set_name, set_path in training_sets.items():
             data_CW = {k: loaded_CW[k] for k in plot_phases if k in loaded_CW}
             data_CCW = {k: loaded_CCW[k] for k in plot_phases if k in loaded_CCW}
 
-            all_hidden_reduced, all_labels, all_batch_size = calculate_subspace(
-                data=[data_CW, data_CCW],
-                t_before_go=t_before_go_plot, data_label = ['CW', 'CCW'], phase_label = plot_phases
-            )
+            _, all_labels, all_batch_size, _, all_hidden = calculate_subspace(data=[data_CW, data_CCW],
+            t_before_go=t_before_go_plot, data_label=['CW', 'CCW'], phase_label=['NF1', 'FF1', 'NF2'])
 
-            rdm, ordered_keys = compute_distance_matrix(
-                all_hidden_reduced=all_hidden_reduced,
-                all_labels=all_labels,
-                all_batch_size=all_batch_size,
-                data_label=['CW', 'CCW']
-            )
+            rdm, ordered_keys = compute_distance_matrix_new(
+            all_hidden=all_hidden, all_labels=all_labels, all_batch_size=all_batch_size, data_label=['CW', 'CCW'])
 
             RDM_matrix[exp].append(rdm)
-            #plot_distance_matrix(rdm, ordered_keys,
-               #      title=f'Exp = {exp}', ax=ax)
 
-        #fig_rdm.tight_layout()
+fig_rdm_avg, axes_rdm_avg = plt.subplots(1, len(exp_names), figsize=(4 * len(exp_names), 4.5))
 
-    # Averaged RDM across networks
-    # fig_rdm_avg, axes_rdm_avg = plt.subplots(1, len(exp_names), figsize=(6 * len(exp_names), 8))
-    fig_rdm_avg, axes_rdm_avg = plt.subplots(len(exp_names),1, figsize=(8, 8 * len(exp_names)))
-    fig_rdm_avg.suptitle(f'Averaged across {num_nets} networks, t = {-1 * t_before_go_plot}', fontsize=20)
+ims_avg = []
+Avg_RDM_matrix = {exp: np.mean(RDM_matrix[exp], axis=0) for exp in exp_names}
+global_max = max(np.max(m) for m in Avg_RDM_matrix.values())
 
-    for ax, exp in zip(axes_rdm_avg, exp_names):
-        avg_rdm = np.mean(RDM_matrix[exp], axis=0)  # (num_nets, N, N) -> (N, N)
-        plot_distance_matrix(avg_rdm, ordered_keys, data_label=['CW', 'CCW'],
-                 title=f'Exp = {exp}', ax=ax)
+for j, (ax, exp) in enumerate(zip(axes_rdm_avg, exp_names)):
+    im = plot_distance_matrix(Avg_RDM_matrix[exp], ordered_keys, data_label=['CW', 'CCW'],
+                              title=f'Exp {j + 1}', ax=ax, colorbar_show=False, max_value=global_max,
+                              ylabel_flag=(j == 0))
+    ims_avg.append(im)
 
-    fig_rdm_avg.tight_layout()
+fig_rdm_avg.tight_layout()
+fig_rdm_avg.subplots_adjust(right=0.93)
+cbar_ax_avg = fig_rdm_avg.add_axes([0.95, 0.15, 0.015, 0.7])
+fig_rdm_avg.colorbar(ims_avg[-1], cax=cbar_ax_avg)
 
+# Show all figures at once at the very end
 plt.show()
-
