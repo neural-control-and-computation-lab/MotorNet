@@ -29,25 +29,26 @@ class ExpTask:
         self.movement_array = th.zeros(4)
         # test conditions
         if self.run_mode == 'test_rand': # starting points and targets are generated randomly
+            self.exp_type = 'random_target'  # This is helpful for generating targets
             catch_chance = 0.
             delay_range = [0.5,0.5]
             init_states = self.effector.draw_random_uniform_states(batch_size).detach().cpu().numpy()
             start_states = init_states
-            self.exp_type = 'random_target' # This is helpful for generating targets
         elif self.run_mode == 'test_center_out': # center out reaching experiment (Exp2 Howard et al. 2013)
+            self.exp_type = 'center_out'
             catch_chance = 0.
             delay_range = [0.5, 0.5]
             init_states = np.repeat(np.expand_dims(base_joint, axis=0), batch_size, axis=0)
             start_states = init_states
-            self.exp_type = 'center_out'
         elif self.run_mode == 'test_mov_diff_loc': # center out reaching experiment shifted to the sides (Exp3 Howard et al. 2013)
+            self.exp_type = 'center_out'
             catch_chance = 0.
             delay_range = [0.5, 0.5]
             shifted_base_joint = self.shift_joints(base_joint, shift_array=[0.1, 0, 0, 0])
             init_states = np.repeat(np.expand_dims(shifted_base_joint, axis=0), batch_size, axis=0)
             start_states = init_states
-            self.exp_type = 'center_out'
         elif self.run_mode == 'test_pro_loc': # center out reaching experiment, hand shifts to the sides, visual feedback remain at the center (Exp8 Howard et al. 2013)
+            self.exp_type = 'center_out'
             catch_chance = 0.
             delay_range = [0.5, 0.5]
             self.shift = True
@@ -55,30 +56,30 @@ class ExpTask:
             start_states = init_states
             shifted_base_joint = self.shift_joints(base_joint, shift_array=[0.1, 0, 0, 0])
             init_states = np.repeat(np.expand_dims(shifted_base_joint, axis=0), batch_size, axis=0)
-            self.exp_type = 'center_out'
         elif self.run_mode == 'test_vis_loc': # center out reaching experiment, hand remain at the center, visual feedback shifts to the sides (Exp7 Howard et al. 2013)
+            self.exp_type = 'center_out'
             catch_chance = 0.
             delay_range = [0.5, 0.5]
             self.shift = True
             init_states = np.repeat(np.expand_dims(base_joint, axis=0), batch_size, axis=0)
             shifted_base_joint = self.shift_joints(base_joint, shift_array=[-0.1, 0, 0, 0])
             start_states = np.repeat(np.expand_dims(shifted_base_joint, axis=0), batch_size, axis=0)
-            self.exp_type = 'center_out'
         # train conditions
         elif self.run_mode == 'train_center_out':
+            self.exp_type = 'center_out'
             delay_range = [0.2, 0.8]
             catch_chance = 0.25
             init_states = np.repeat(np.expand_dims(base_joint, axis=0), batch_size, axis=0)
             start_states = init_states
-            self.exp_type = 'center_out'
         elif self.run_mode == 'train_mov_diff_loc':
+            self.exp_type = 'center_out'
             delay_range = [0.2, 0.8]
             catch_chance = 0.25
             shifted_base_joint = self.shift_joints(base_joint, shift_array=[0.1, 0, 0, 0])
             init_states = np.repeat(np.expand_dims(shifted_base_joint, axis=0), batch_size, axis=0)
             start_states = init_states
-            self.exp_type = 'center_out'
         elif self.run_mode == 'train_pro_loc':
+            self.exp_type = 'center_out'
             delay_range = [0.2, 0.8]
             catch_chance = 0.25
             self.shift = True
@@ -86,15 +87,14 @@ class ExpTask:
             start_states = init_states
             shifted_base_joint = self.shift_joints(base_joint, shift_array=[0.1, 0, 0, 0])
             init_states = np.repeat(np.expand_dims(shifted_base_joint, axis=0), batch_size, axis=0)
-            self.exp_type = 'center_out'
         elif self.run_mode == 'train_vis_loc':
+            self.exp_type = 'center_out'
             delay_range = [0.2, 0.8]
             catch_chance = 0.25
             self.shift = True
             init_states = np.repeat(np.expand_dims(base_joint, axis=0), batch_size, axis=0)
             shifted_base_joint = self.shift_joints(base_joint, shift_array=[-0.1, 0, 0, 0])
             start_states = np.repeat(np.expand_dims(shifted_base_joint, axis=0), batch_size, axis=0)
-            self.exp_type = 'center_out'
         else: # train random (train_rand)
             delay_range = [0.2, 0.8]
             catch_chance = 0.25 # catch trials with no go cue are useful to prevent the network from anticipating the go cue
@@ -104,7 +104,8 @@ class ExpTask:
             # Per-TRIAL random visual offsets so each trial in a batch independently
             # gets its own shift (or no shift). Forces the network to keep cue-detection
             # circuits trial-local rather than batch-level.
-            p_shift = 0.5
+            # p_shift = 0.5
+            p_shift = 0.0
             has_shift = (np.random.rand(batch_size) < p_shift).astype(np.float32)
             sx = np.random.uniform(-0.1, 0.1, size=batch_size).astype(np.float32) * has_shift
             sy = np.random.uniform(-0.05, 0.05, size=batch_size).astype(np.float32) * has_shift
@@ -128,17 +129,18 @@ class ExpTask:
             if self.exp_type == 'center_out':
                 targets[i, :, :] = np.tile(np.expand_dims(start_point + circular_offset[:, i % self.circular_target_num].T, axis=1),(1, n_timesteps, 1))
             else:
-                targets[i, :, :] = np.tile(np.expand_dims(self.effector.joint2cartesian(self.effector.draw_random_uniform_states(1)).detach().cpu().numpy(),axis=1) + self.movement_array.detach().cpu().numpy() , (1, n_timesteps, 1))
+                targets[i, :, :] = np.tile(np.expand_dims((self.effector.joint2cartesian(self.effector.draw_random_uniform_states(1)) - self.movement_array[i,:]).detach().cpu().numpy(),axis=1) , (1, n_timesteps, 1))
 
             inputs[i, :, 0:2] = targets[i, -1, 0:2]
             # Go cue
             inputs[i, :, 2] = 1.
 
+            start_loc = start_point if start_point.shape[0] == 1 else start_point[i,:]
             if not is_catch:
-                targets[i, 0:delay_time, :] = start_point
+                targets[i, 0:delay_time, :] = start_loc
                 inputs[i, delay_time:, 2] = 0 # turn off go cue to initiate movement
             else:
-                targets[i, :, :] = start_point
+                targets[i, :, :] = start_loc
 
             # Add noise to the inputs
             inputs[i, :, :] = inputs[i, :, :] + np.random.normal(loc=0., scale=1e-3, size=(inputs.shape[1], inputs.shape[2]))
@@ -147,16 +149,16 @@ class ExpTask:
 
     def shift_joints(self, base_joint, shift_array= [0.1, 0, 0, 0]):
         base_cartesian = self.effector.joint2cartesian(th.tensor(base_joint, dtype=th.float32))
-        shift_tensor = th.tensor([0.1, 0, 0, 0], dtype=th.float32)
+        shift_tensor_default = th.tensor([0.1, 0, 0, 0], dtype=th.float32)
         if self.exp_type == 'random_target':
             shift_tensor = th.tensor(shift_array, dtype=th.float32)
             shifted_cartesian = base_cartesian + shift_tensor
-            self.movement_array = shift_tensor
+            self.movement_array = -1 * shift_tensor
         elif self.cue == 'right':
-            shifted_cartesian = base_cartesian + shift_tensor
+            shifted_cartesian = base_cartesian + shift_tensor_default
             self.movement_array = th.tensor(shift_array, dtype=th.float32)
         elif self.cue == 'left':
-            shifted_cartesian = base_cartesian - shift_tensor
+            shifted_cartesian = base_cartesian - shift_tensor_default
             self.movement_array = -1 * th.tensor(shift_array, dtype=th.float32)
         else:
             shifted_cartesian = base_cartesian + th.tensor([0, 0, 0, 0], dtype=th.float32)
