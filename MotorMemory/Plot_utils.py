@@ -128,53 +128,9 @@ def calculate_subspace(data, t_before_go=10, data_label = None, phase_label = No
     pca = PCA(n_components=n_components)
     all_hidden_reduced = pca.fit_transform(np.squeeze(th.cat(all_hidden, dim=0).detach().cpu().numpy()))
     # print('Explained Variance = ', pca.explained_variance_ratio_)
+    all_hidden_output = all_hidden
 
-    return all_hidden_reduced, all_labels, all_batch_size, pca.explained_variance_ratio_, all_hidden_output
-
-
-# This function calculate the distance matrices from the dimensionally reducted hidden data
-def compute_distance_matrix(all_hidden_reduced, all_labels, all_batch_size, phase_order=None, data_label=None):
-
-    if phase_order is None:
-        phase_order = ['NF1', 'FF1', 'NF2']
-
-    centers = {}
-    offset = 0
-    pre_data, pre_phase = None, None
-    i_data_phase = 0
-
-    if isinstance(all_hidden_reduced, np.ndarray):
-        all_hidden_reduced = all_hidden_reduced
-    elif isinstance(all_hidden_reduced, list) and isinstance(all_hidden_reduced[0], th.Tensor):
-        all_hidden_reduced = th.cat(all_hidden_reduced, dim=0).detach().cpu().numpy()
-
-    for batch_size, (dataset_idx, phase_name) in zip(all_batch_size, all_labels):
-        if pre_data == dataset_idx and pre_phase == phase_name:
-            i_data_phase += 1
-        else:
-            i_data_phase = 0
-
-        plot_data = all_hidden_reduced[offset: offset + batch_size, :]
-        centers[(dataset_idx, phase_name, i_data_phase)] = plot_data.mean(axis=0)
-
-        offset += batch_size
-        pre_data, pre_phase = dataset_idx, phase_name
-
-    dataset_list = sorted(set(ds for ds, _, _ in centers.keys()))
-    ordered_keys = []
-    for dataset_idx in dataset_list:
-        for phase in phase_order:
-            batch_indices = sorted(k[2] for k in centers if k[0] == dataset_idx and k[1] == phase)
-            for batch_idx in batch_indices:
-                if (dataset_idx, phase, batch_idx) in centers:
-                    ordered_keys.append((dataset_idx, phase, batch_idx))
-
-    # ordered_keys = centers.keys()
-
-    center_matrix = np.array([centers[k] for k in ordered_keys])
-    rdm = cdist(center_matrix, center_matrix, metric='euclidean')
-
-    return rdm, ordered_keys
+    return all_hidden_reduced, all_labels, all_batch_size, pca.explained_variance_ratio_, all_hidden
 
 
 
@@ -235,4 +191,3 @@ def compute_pred_matrix(results, phase_order=None, metric='r2_test'):
                 matrix[i, j] = results[key][metric]
 
     return matrix, keys
-
