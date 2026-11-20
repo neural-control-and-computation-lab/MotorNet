@@ -116,9 +116,9 @@ def calculate_loss(task, episode_data):
     cartesian_loss = 1e3 * th.mean(th.sum(th.abs(xy[:, :, :2] - all_targets), dim=-1))
     # Match the Two Target headline objective's weaker effort penalty and stronger
     # trajectory-smoothness penalty while leaving every loss definition unchanged.
-    muscle_loss = 1e-1 * th.mean(th.sum(all_force, dim=-1))
-    spectral_loss = 1e2 * th.mean(th.sum(th.square(th.diff(all_hidden, 2, dim=1)), dim=-1))
-    jerk_loss = 1e3 * th.mean(th.sum(th.square(th.diff(xy[:, :, 2:], 2, dim=1)), dim=-1))
+    muscle_loss = 1e-2 * th.mean(th.sum(all_force, dim=-1))
+    spectral_loss = 1e4 * th.mean(th.sum(th.square(th.diff(all_hidden, 2, dim=1)), dim=-1))
+    jerk_loss = 1e5 * th.mean(th.sum(th.square(th.diff(xy[:, :, 2:], 2, dim=1)), dim=-1))
 
     total_loss = cartesian_loss + muscle_loss + jerk_loss + spectral_loss
 

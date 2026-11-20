@@ -50,7 +50,7 @@ class ExpConfig:
         self.batch_size = 32
         self.phases = ['growing_up']
         self.k_values = [0]
-        self.n_batches = [2000]
+        self.n_batches = [5000]
         self.load_baseline = [False]
         self.run_modes = ["train_rand"]
         self.exp_save_names = ["baseline"]
@@ -69,7 +69,7 @@ class ExpConfig:
         self.batch_size = 32
         self.phases = ['NF1', 'FF1', 'NF2']
         self.k_values = [0,13,0]
-        self.n_batches = [500,100,50]#[700,70,50]
+        self.n_batches = [500, 300, 50]
         self.load_baseline = [True, False, False]   # This is useful for the phases needing growing up weights
         self.run_modes = [f"{self.mode}_{self.exp}"]*3
         self.exp_save_names = [f"{self.exp}"]*3
@@ -143,7 +143,7 @@ def run_training(env, task, cfg):
 
         force_field = 'random' if phase == 'FF1' else 'null'
         contextual_cue = 'random' if phase in ['NF1', 'NF2'] else 'force_dependent'
-        interval = 100 if phase == 'growing_up' else 50 if phase == 'NF1' else 5
+        interval = 100 if phase == 'growing_up' else 50 if phase == 'NF1' else 15 if phase == 'FF1' else 5
 
         losses, endpoint_dev, lateral_dev, weights = train_batches(
             env=env, task=task, policy=policy, optimizer=optimizer, n_batches=n_batch,

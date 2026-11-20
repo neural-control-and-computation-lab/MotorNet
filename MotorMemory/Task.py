@@ -104,8 +104,7 @@ class ExpTask:
             # Per-TRIAL random visual offsets so each trial in a batch independently
             # gets its own shift (or no shift). Forces the network to keep cue-detection
             # circuits trial-local rather than batch-level.
-            # p_shift = 0.5
-            p_shift = 0.0
+            p_shift = 0.5
             has_shift = (np.random.rand(batch_size) < p_shift).astype(np.float32)
             sx = np.random.uniform(-0.1, 0.1, size=batch_size).astype(np.float32) * has_shift
             sy = np.random.uniform(-0.05, 0.05, size=batch_size).astype(np.float32) * has_shift

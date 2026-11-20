@@ -240,6 +240,7 @@ N_NF1_KEEP = 100
 
 break_drawn = False
 ax.axhline(0, color="black", linestyle="--", linewidth=1.5, zorder=1)
+phase_ends = {}
 
 for j, exp in enumerate(exp_names):
     offset = 0
@@ -286,12 +287,16 @@ for j, exp in enumerate(exp_names):
             ax.plot(x_shifted[0], mean_values[0], marker="s", color=plot_table[exp]['color'],
                     markersize=5, markeredgecolor="black", markeredgewidth=1, zorder=3)
 
+        if j == 0:
+            phase_ends[phase] = int(x_shifted[-1]) + 1
         offset = x_shifted[-1] + 1
 
 ax.set_xlabel("Batch", fontsize=14)
 if offset >= 600:
-    ax.set_xlim(430,650)
-    ax.set_xticks([450, 500, 600, 650])
+    nf1_end = phase_ends.get('NF1', 500)
+    ff1_end = phase_ends.get('FF1', 600)
+    ax.set_xlim(nf1_end - 70, offset)
+    ax.set_xticks([nf1_end - 50, nf1_end, ff1_end, offset])
 ax.set_ylabel(dev_ylabel, fontsize=14)
 if is_force_comp:
     ax.set_ylim(-10, 100)
