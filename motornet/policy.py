@@ -102,7 +102,7 @@ class ModularPolicyGRU(nn.Module):
         if cancelation_matrix is None:
             self.cancelation_matrix = cancelation_matrix
         else:
-            self.cancelation_matrix = th.tensor(cancelation_matrix, dtype=th.float32)
+            self.cancelation_matrix = th.tensor(cancelation_matrix, dtype=th.float32, device=self.device)
 
         # Set the random seed
         if random_seed:
@@ -357,7 +357,7 @@ class ModularPolicyGRU(nn.Module):
         self.to(device)
 
     def set_cancelation_matrix(self, cancelation_matrix):
-        self.cancelation_matrix = th.tensor(cancelation_matrix, dtype=th.float32)
+        self.cancelation_matrix = th.tensor(cancelation_matrix, dtype=th.float32, device=self.device)
 
     def reset_counter(self):
         self.counter = 0
@@ -399,7 +399,7 @@ class ModularPolicyGRU(nn.Module):
                 concat_hidden = th.cat((x, r * h_prev_delayed), dim=1)
                 h_tilda = self.activation(F.linear(concat_hidden, Wh_use[self.module_dims[i], :],
                                                    self.bh[self.module_dims[i]]) +
-                                          (th.randn(len(self.module_dims[i])) * 1e-3))
+                                          (th.randn(len(self.module_dims[i]), device=x.device, dtype=x.dtype) * 1e-3))
                 h = (1 - z) * h_prev_delayed[:, self.module_dims[i]] + z * h_tilda
                 # Store new hidden states to correct module
                 h_new[:, self.module_dims[i]] = h
@@ -410,7 +410,7 @@ class ModularPolicyGRU(nn.Module):
             z = th.sigmoid(F.linear(concat, Wz_use, self.bz))
             r = th.sigmoid(F.linear(concat, Wr_use, self.br))
             concat_hidden = th.cat((x, r * h_prev), dim=1)
-            h_tilda = self.activation(F.linear(concat_hidden, Wh_use, self.bh) + (th.randn(self.Wh.shape[0]) * 1e-3))
+            h_tilda = self.activation(F.linear(concat_hidden, Wh_use, self.bh) + (th.randn(self.Wh.shape[0], device=x.device, dtype=x.dtype) * 1e-3))
             h_new = (1 - z) * h_prev + z * h_tilda
 
         if self.cancelation_matrix is not None and self.counter in self.cancel_times:
@@ -472,8 +472,6 @@ class ModularPolicyGRU(nn.Module):
             unittype = self.unittype_W
             Wr_i, Wr = th.split(self.Wr.detach(), [self.input_size, self.hidden_size], dim=1)
             Wr_i_cached, Wr_cached = th.split(self.Wr_cached, [self.input_size, self.hidden_size], dim=1)
-            print(th.sum((Wr < 0) & (unittype == 1)))
-            print(th.sum((Wr > 0) & (unittype == -1)))
             if zero_out:
                 Wr[(Wr < 0) & (unittype == 1)] = 0
                 Wr[(Wr > 0) & (unittype == -1)] = 0
@@ -485,8 +483,6 @@ class ModularPolicyGRU(nn.Module):
 
             Wz_i, Wz = th.split(self.Wz.detach(), [self.input_size, self.hidden_size], dim=1)
             Wz_i_cached, Wz_cached = th.split(self.Wz_cached, [self.input_size, self.hidden_size], dim=1)
-            print(th.sum((Wz < 0) & (unittype == 1)))
-            print(th.sum((Wz > 0) & (unittype == -1)))
             if zero_out:
                 Wz[(Wz < 0) & (unittype == 1)] = 0
                 Wz[(Wz > 0) & (unittype == -1)] = 0
@@ -498,8 +494,6 @@ class ModularPolicyGRU(nn.Module):
 
             Wh_i, Wh = th.split(self.Wh.detach(), [self.input_size, self.hidden_size], dim=1)
             Wh_i_cached, Wh_cached = th.split(self.Wh_cached, [self.input_size, self.hidden_size], dim=1)
-            print(th.sum((Wh < 0) & (unittype == 1)))
-            print(th.sum((Wh > 0) & (unittype == -1)))
             if zero_out:
                 Wh[(Wh < 0) & (unittype == 1)] = 0
                 Wh[(Wh > 0) & (unittype == -1)] = 0

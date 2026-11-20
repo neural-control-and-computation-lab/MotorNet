@@ -24,7 +24,7 @@ class Kernel_Gaussian():
         if do_plot:
             for K in range(len(Kernel_mu)):
                 mu = Kernel_mu[K,:]
-                Gaussian_pdf = lambda x,y : np.linalg.det(2*np.pi*self.S) * np.exp(-0.5 * np.sum(((np.concatenate((x,y),axis=-1)-mu).T) * (np.linalg.pinv(self.S)@(np.concatenate((x,y), axis=-1)-mu).T), axis=0))
+                Gaussian_pdf = lambda x,y : (1.0 / np.sqrt(np.linalg.det(2 * np.pi * self.S))) * np.exp(-0.5 * np.sum(((np.concatenate((x,y),axis=-1)-mu).T) * (np.linalg.pinv(self.S)@(np.concatenate((x,y), axis=-1)-mu).T), axis=0))
                 Z = Gaussian_pdf(X.reshape(-1,1), Y.reshape(-1,1))
                 Z = Z.reshape(X.shape)
                 fig = plt.figure()
@@ -42,6 +42,6 @@ class Kernel_Gaussian():
         M = np.zeros((x.shape[0], len(self.centers)))
         for K in range(len(self.centers)):
             mu = self.centers[K,:]
-            Gaussian_pdf =  lambda x,y : np.linalg.det(2*np.pi*self.S) * np.exp(-0.5 * np.sum(((np.concatenate((x,y),axis=-1)-mu).T) * (np.linalg.pinv(self.S)@(np.concatenate((x,y), axis=-1)-mu).T), axis=0))
+            Gaussian_pdf = lambda x,y : (1.0 / np.sqrt(np.linalg.det(2 * np.pi * self.S))) * np.exp(-0.5 * np.sum(((np.concatenate((x,y),axis=-1)-mu).T) * (np.linalg.pinv(self.S)@(np.concatenate((x,y), axis=-1)-mu).T), axis=0))
             M[:, K] = Gaussian_pdf(x,y)
         return M

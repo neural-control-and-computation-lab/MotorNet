@@ -22,11 +22,13 @@ class ExpTaskEnv(mn.environment.Environment):
     self.elapsed = 0.
     action = th.zeros((batch_size, self.muscle.n_muscles)).to(self.device)
 
+    self._deterministic = deterministic
     self.obs_buffer["proprioception"] = [self.get_proprioception()] * len(self.obs_buffer["proprioception"])
     self.obs_buffer["vision"] = [self.get_vision()] * len(self.obs_buffer["vision"])
     self.obs_buffer["action"] = [action] * self.action_frame_stacking
 
     obs = self.get_obs(deterministic=deterministic)
+    self._deterministic = False
     info = {
       "states": self.states,
       "action": action,
@@ -44,10 +46,13 @@ class ExpTaskEnv(mn.environment.Environment):
 
     self.effector.step(noisy_action, **kwargs)
 
-    obs = self.get_obs(action=noisy_action)
+    self._deterministic = deterministic
+    obs = self.get_obs(action=noisy_action, deterministic=deterministic)
+    self._deterministic = False
     reward = None
     truncated = False
-    terminated = bool(self.elapsed >= self.max_ep_duration)
+    # Guard against binary float accumulation delaying termination by one step.
+    terminated = bool(self.elapsed >= self.max_ep_duration - 1e-8)
     info = {
       "states": self.states,
       "action": action,

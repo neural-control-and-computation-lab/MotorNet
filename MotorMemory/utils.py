@@ -1,3 +1,4 @@
+import os
 import torch as th
 import matplotlib.pyplot as plt
 
@@ -46,7 +47,8 @@ def applied_load(endpoint_vel, k, mode = 'CW'):
 
 def applied_channel_force(vel, pos, init, goal, k = 150, b = 0.5):
     line_vec = goal - init                                    # (batch, 2)
-    inv_norm2 = 1.0 / (th.sum(line_vec**2, dim=-1, keepdim=True) + 1e-8)
+    line_norm2 = th.sum(line_vec**2, dim=-1, keepdim=True)
+    inv_norm2 = 1.0 / (line_norm2 + 1e-8)
 
     def perp(v):
         proj = line_vec * th.sum(line_vec * v, dim=-1, keepdim=True) * inv_norm2
@@ -55,7 +57,7 @@ def applied_channel_force(vel, pos, init, goal, k = 150, b = 0.5):
     err   = perp(pos - init)     # lateral position deviation
     err_d = perp(vel)            # lateral velocity
 
-    return -(k * err + b * err_d)
+    return -(k * err + b * err_d) * (line_norm2 > 1e-12)
 
 
 def applied_external_load(task, info, target, time_step, curl_gain, chan_k, chan_b, force_mask, mode='CW', is_channel=None):
@@ -69,23 +71,27 @@ def applied_external_load(task, info, target, time_step, curl_gain, chan_k, chan
     load = th.zeros_like(vel)
 
     init = target[:,0,:2]
-    goal = target[:,time_step,:2]
+    # Use the final reach target so the channel axis is well-defined during the hold period too.
+    goal = target[:, -1, :2]
 
 
     if is_channel is None:
         is_channel = th.zeros(vel.shape[0], dtype=th.bool, device=vel.device)
-    m = is_channel[:, None].float()
+    m = is_channel.to(device=vel.device, dtype=vel.dtype).unsqueeze(-1)
 
     curl = applied_load(vel, curl_gain, mode)
     wall = applied_channel_force(vel, pos, init, goal, chan_k, chan_b)
 
-    return load + ((1 - m) * curl + m * wall) * force_mask, wall * force_mask
+    # Keep the force channel engaged from t=0 to prevent hold drift and a go-cue step impulse,
+    # while keeping curl loads gated to movement via force_mask.
+    channel_force = m * wall
+    return load + (1.0 - m) * curl * force_mask + channel_force, channel_force
 
 
 
 # The next two functions are for comparing output weights between two different phases
 def eval_weights(saveLoc, phase, exp, batch_number):
-    weights = th.load(saveLoc + f'weightsDic_{phase}_{exp}')
+    weights = th.load(saveLoc + f'weightsDic_{phase}_{exp}', weights_only=False)
     print(weights.keys())
     state = weights[f'{batch_number}']
     # state = th.load(saveLoc + f'weights_{phase}_{exp}')
@@ -140,7 +146,7 @@ def compare_weights(state1, state2):
 
 
 if __name__ == "__main__":
-    saveLoc = '/Users/pounemirzazadeh/Motornet/MultiNet/Modular_version/task_0/'
+    saveLoc = '/Users/pounemirzazadeh/Motornet/MultiNet/Modular_version/task_0/' if os.path.isdir('/Users/pounemirzazadeh') else os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'channel_test', 'task_0') + '/'
     # Compare weights between the following two phases. This is especially useful to verify that freezing worked as expected
     phase1 = 'FF1'
     exp1 = 'center_out'

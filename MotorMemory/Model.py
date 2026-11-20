@@ -8,9 +8,9 @@ import motornet as mn
 
 # Run a single episode
 def run_episode(env, task, policy, batch_size, n_t, device, force_field='null', contextual_cue='null', k=0,
-                is_channel=None, chan_k=2000., chan_b=125., *args, **kwargs):
+                is_channel=None, chan_k=2000., chan_b=125., flip_cue=False, *args, **kwargs):
     if force_field == 'random':
-        force_dir = np.random.choice(['CW', 'CCW'])
+        force_dir = str(np.random.choice(['CW', 'CCW']))
     elif force_field == 'CW':
         force_dir = 'CW'
     elif force_field == 'CCW':
@@ -21,16 +21,16 @@ def run_episode(env, task, policy, batch_size, n_t, device, force_field='null', 
     if contextual_cue == 'null':
         task.cue = 'null'
     elif contextual_cue == 'random':
-        task.cue = np.random.choice(['right', 'left'])
+        task.cue = str(np.random.choice(['right', 'left']))
     elif contextual_cue == 'right':
         task.cue = 'right'
     elif contextual_cue == 'left':
         task.cue = 'left'
     elif contextual_cue == 'force_dependent':
         if force_dir == 'CW':
-            task.cue = 'right'
+            task.cue = 'left' if flip_cue else 'right'
         elif force_dir == 'CCW':
-            task.cue = 'left'
+            task.cue = 'right' if flip_cue else 'left'
         else:
             task.cue = 'null'
     else:
@@ -57,8 +57,9 @@ def run_episode(env, task, policy, batch_size, n_t, device, force_field='null', 
     all_joint = []
     all_channel_force = []
 
+    # Integer counter avoids int(elapsed / dt) float truncation skipping steps.
+    t_step = 0
     while not terminated:  # will run until `max_ep_duration` is reached
-        t_step = int(env.elapsed / env.dt)
         obs = task.shift_obs(obs)  # This line added for Exp 8
         obs = th.concat((obs, inp[:, t_step, :]), dim=1)
         action, h = policy(obs, h)
@@ -84,6 +85,7 @@ def run_episode(env, task, policy, batch_size, n_t, device, force_field='null', 
         all_vis_inp.append(obs[:, None, :2])
         all_joint.append(info['states']['joint'][:, None, :])
         all_channel_force.append(channel_force[:, None, :])
+        t_step += 1
 
     ext_force = force_dir
 
@@ -135,28 +137,66 @@ def calculate_deviations(task, episode_data, n_t, eps=1e-6):
     # xy = task.shift_traj(xy)
     xy = episode_data['traj']
     targets = episode_data['targets']
+    n_steps = xy.shape[1]
 
-    point1 = th.tile(th.unsqueeze(targets[:, 0, :], 1), (1, n_t - 1, 1))
-    point2 = th.tile(th.unsqueeze(targets[:, -1, :], 1), (1, n_t - 1, 1))
+    point1 = th.tile(th.unsqueeze(targets[:, 0, :], 1), (1, n_steps, 1))
+    point2 = th.tile(th.unsqueeze(targets[:, -1, :], 1), (1, n_steps, 1))
     diff = point2 - point1
     numerator = (diff[:, :, 1] * xy[:, :, 0] - diff[:, :, 0] * xy[:, :, 1]
                  + point2[:, :, 0] * point1[:, :, 1] - point2[:, :, 1] * point1[:, :, 0])
     denominator = th.sqrt(th.pow(diff[:, :, 1], 2) + th.pow(diff[:, :, 0], 2))
     nonzero_den = (denominator.abs() > eps).all(dim=1)
+    if not nonzero_den.any():
+        return xy.new_zeros(()), xy.new_zeros(()), xy.new_zeros((0,)), xy.new_zeros((0,))
     ratio = numerator[nonzero_den] / denominator[nonzero_den]
 
-    lateral_mean = th.mean(ratio[th.arange(ratio.shape[0]), (th.max(th.abs(ratio), dim=1)[1])])
-    endpoint_mean = th.mean(th.norm(targets[:, -1, :] - xy[:, -1, :2], dim=1))
+    # Restrict peak lateral error search to movement steps so hold drift does not mask reach error.
+    move_mask = episode_data['inp'][nonzero_den, :, 2] < 0.5
+    ratio_eval = th.where(move_mask.any(dim=1, keepdim=True), th.where(move_mask, ratio, th.zeros_like(ratio)), ratio)
+    peak_idx = th.max(th.abs(ratio_eval), dim=1)[1]
 
-    lateral_batch = ratio[th.arange(ratio.shape[0]), th.max(th.abs(ratio), dim=1)[1]]
-    endpoint_batch = th.norm(targets[:, -1, :] - xy[:, -1, :2], dim=1)
+    lateral_batch = ratio_eval[th.arange(ratio_eval.shape[0], device=xy.device), peak_idx]
+    endpoint_batch = th.norm(targets[nonzero_den, -1, :] - xy[nonzero_den, -1, :2], dim=1)
+    lateral_mean = th.mean(lateral_batch)
+    endpoint_mean = th.mean(endpoint_batch)
 
     return lateral_mean, endpoint_mean, lateral_batch, endpoint_batch
 
 
+def calculate_force_compensation(task, episode_data, curl_gain=13.0, eps=1e-6, flip_cue=False):
+    """Compute percent force compensation on channel probe trials (Howard et al., 2013)."""
+    xy = episode_data['traj']
+    vel = xy[:, :, 2:]
+    targets = episode_data['targets']
+    wall = episode_data['channel_force']
+
+    line_vec = targets[:, -1, :2] - targets[:, 0, :2]
+    dist = th.norm(line_vec, dim=-1, keepdim=True)
+    valid = dist.squeeze(-1) > eps
+    if not valid.any():
+        return xy.new_zeros(()), xy.new_zeros((0,))
+
+    u = line_vec[valid] / dist[valid]
+    n_cw = th.stack([u[:, 1], -u[:, 0]], dim=-1)
+    ext_force = episode_data.get('ext_force', None)
+    ccw_cue = 'right' if flip_cue else 'left'
+    is_ccw = (ext_force == 'CCW') or (ext_force is None and task.cue == ccw_cue)
+    n_field = -n_cw if is_ccw else n_cw
+
+    move_mask = movement_phase_mask(episode_data['inp'][valid, :, 2]).squeeze(-1)
+    comp_force_int = th.sum(th.sum(wall[valid] * n_field[:, None, :], dim=-1) * move_mask, dim=-1)
+    ideal_force_int = curl_gain * th.sum(th.norm(vel[valid], dim=-1) * move_mask, dim=-1)
+    comp_pct_batch = th.where(
+        ideal_force_int > 1e-3,
+        100.0 * comp_force_int / ideal_force_int.clamp_min(eps),
+        th.zeros_like(comp_force_int),
+    )
+    return th.mean(comp_pct_batch), comp_pct_batch
+
+
 # Run multiple training batches and optimize the policy.
 def train_batches(env, task, policy, optimizer, n_batches, batch_size, interval, ep_dur, device, run_mode, force_field,
-                  contextual_cue, k, *args, **kwargs):
+                  contextual_cue, k, flip_cue=False, *args, **kwargs):
     total_losses = []
     cartesian_losses = []
     muscle_losses = []
@@ -169,7 +209,7 @@ def train_batches(env, task, policy, optimizer, n_batches, batch_size, interval,
     n_t = int(ep_dur / env.effector.dt) + 1
     for batch in range(n_batches):
         episode_data = run_episode(env=env, task=task, policy=policy, batch_size=batch_size, n_t=n_t, device=device,
-                                   force_field=force_field, contextual_cue=contextual_cue, k=k, *args, **kwargs)
+                                   force_field=force_field, contextual_cue=contextual_cue, k=k, flip_cue=flip_cue, *args, **kwargs)
         loss_dict = calculate_loss(task, episode_data)
         total_losses.append(loss_dict['total'].item())
         cartesian_losses.append(loss_dict['cartesian'].item())
@@ -178,10 +218,9 @@ def train_batches(env, task, policy, optimizer, n_batches, batch_size, interval,
         jerk_losses.append(loss_dict['jerk'].item())
 
         lat_dev, end_dev, lat_dev_batch, end_dev_batch = calculate_deviations(task, episode_data, n_t)
-        if task.cue == 'left':
-            lat_dev = - lat_dev
-        else:
-            lat_dev = lat_dev
+        ccw_cue = 'right' if flip_cue else 'left'
+        if (episode_data['ext_force'] == 'CCW') or (episode_data['ext_force'] is None and task.cue == ccw_cue):
+            lat_dev = -lat_dev
         # Detach: lat_dev/end_dev carry grad_fn from episode_data's autograd graph; appending
         # the live tensors to a list across batches pins the per-episode graph and leaks memory.
         lateral_dev.append(lat_dev.detach())
@@ -208,28 +247,27 @@ def train_batches(env, task, policy, optimizer, n_batches, batch_size, interval,
 
 # Run test episodes without training.
 def test_batches(env, task, policy, n_batches, batch_size, interval, ep_dur, device, run_mode, force_field,
-                 contextual_cue, k, *args, **kwargs):
+                 contextual_cue, k, flip_cue=False, *args, **kwargs):
     task.run_mode = run_mode
     n_t = int(ep_dur / env.effector.dt) + 1
     endpoint_dev_mean = []
     lateral_dev_mean = []
     endpoint_dev_batch = []
     lateral_dev_batch = []
-    for batch in range(n_batches):
-        episode_data = run_episode(env=env, task=task, policy=policy, batch_size=batch_size, n_t=n_t, device=device,
-                                   force_field=force_field, contextual_cue=contextual_cue, k=k, *args, **kwargs)
-        lat_dev_mean, end_dev_mean, lat_dev_batch, end_dev_batch = calculate_deviations(task, episode_data, n_t)
-        if task.cue == 'left':
-            lat_dev_mean = - lat_dev_mean
-            lat_dev_batch = - lat_dev_batch
-        else:
-            lat_dev_mean = lat_dev_mean
-            lat_dev_batch = lat_dev_batch
+    ccw_cue = 'right' if flip_cue else 'left'
+    with th.no_grad():
+        for batch in range(n_batches):
+            episode_data = run_episode(env=env, task=task, policy=policy, batch_size=batch_size, n_t=n_t, device=device,
+                                       force_field=force_field, contextual_cue=contextual_cue, k=k, flip_cue=flip_cue, *args, **kwargs)
+            lat_dev_mean, end_dev_mean, lat_dev_batch, end_dev_batch = calculate_deviations(task, episode_data, n_t)
+            if (episode_data['ext_force'] == 'CCW') or (episode_data['ext_force'] is None and task.cue == ccw_cue):
+                lat_dev_mean = -lat_dev_mean
+                lat_dev_batch = -lat_dev_batch
 
-        lateral_dev_mean.append(lat_dev_mean)
-        endpoint_dev_mean.append(end_dev_mean)
-        lateral_dev_batch.append(lat_dev_batch)
-        endpoint_dev_batch.append(end_dev_batch)
+            lateral_dev_mean.append(lat_dev_mean.detach())
+            endpoint_dev_mean.append(end_dev_mean.detach())
+            lateral_dev_batch.append(lat_dev_batch.detach())
+            endpoint_dev_batch.append(end_dev_batch.detach())
 
     return episode_data, endpoint_dev_mean, lateral_dev_mean, endpoint_dev_batch, lateral_dev_batch
 

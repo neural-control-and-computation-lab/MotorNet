@@ -13,20 +13,27 @@ if current_dir not in sys.path:
 import Env, Task
 from utils import policy_mod
 from PolicyLoad import creat_policy
-from Model import train_batches, test_batches, calculate_deviations
+from Model import train_batches, test_batches, calculate_deviations, calculate_force_compensation
 from joblib import Parallel, delayed
 
 class ExpConfig:
-    def __init__(self, net_id, mode = 'test', exp_name='center_out'):
+    def __init__(self, net_id, mode = 'test', exp_name='center_out', save_root=None):
         self.mode = mode
         self.net_id = net_id
         self.exp = exp_name
         self.dt = 0.01
         self.ep_dur = 2.0
         self.device = th.device("cpu")
-        self.saveLoc = f"/Users/pounemirzazadeh/Motornet/MultiNet/Force_version/test_no_shift_gu/task_{net_id}/"
+        base_dir = save_root or (
+            "/Users/pounemirzazadeh/Motornet/MultiNet/Force_version/test_no_shift_gu"
+            if os.path.isdir("/Users/pounemirzazadeh")
+            else os.path.join(current_dir, "data", "channel_test")
+        )
+        self.saveLoc = os.path.join(base_dir, f"task_{net_id}") + "/"
         os.makedirs(self.saveLoc, exist_ok=True)
         self.is_channel = None
+        # Howard et al. (2013) 50/50 cue-field counterbalancing across networks.
+        self.flip_cue = bool(self.net_id % 2 == 1)
         # Configuration for phases:
         if self.mode == 'baseline':
             self._setup_baseline()
@@ -73,7 +80,8 @@ class ExpConfig:
         self.k_values = [0, 13, 0]
         self.n_batches = [1, 1, 1]
         self.run_modes = [f"{self.mode}_{self.exp}"]*3
-        self.contextual_cues = ['left','right']
+        self.exp_save_names = [f"{self.exp}"]*3
+        self.contextual_cues = ['right', 'left'] if self.flip_cue else ['left', 'right']
         self.force_fields = ['CCW','CW']
 
     def _setup_channel_testing(self):
@@ -82,7 +90,8 @@ class ExpConfig:
         self.k_values = [0, 0, 0]
         self.n_batches = [1, 1, 1]
         self.run_modes = [f"test_{self.exp}"]*3
-        self.contextual_cues = ['left','right']
+        self.exp_save_names = [f"{self.exp}"]*3
+        self.contextual_cues = ['right', 'left'] if self.flip_cue else ['left', 'right']
         self.force_fields = ['CCW','CW']
         self.is_channel = th.ones(self.batch_size, dtype=th.bool)
 
@@ -114,19 +123,19 @@ def run_training(env, task, cfg):
             pass
         else:
             if load_baseline_flag:
-                weightsDic = th.load(cfg.saveLoc + f'weightsDic_growing_up_baseline')
+                weightsDic = th.load(cfg.saveLoc + f'weightsDic_growing_up_baseline', weights_only=False)
                 policy.load_state_dict(weightsDic[next(reversed(weightsDic))])
 
                 policy.freeze(input_freeze=input_freeze, output_freeze=output_freeze)
                 prev_opt_path = cfg.saveLoc + 'optStateDic_growing_up_baseline'
             else:
-                weightsDic = th.load(cfg.saveLoc + f'weightsDic_{cfg.phases[i-1]}_{cfg.exp_save_names[i-1]}')
+                weightsDic = th.load(cfg.saveLoc + f'weightsDic_{cfg.phases[i-1]}_{cfg.exp_save_names[i-1]}', weights_only=False)
                 policy.load_state_dict(weightsDic[next(reversed(weightsDic))])
                 policy.freeze(input_freeze=input_freeze, output_freeze=output_freeze)
                 prev_opt_path = cfg.saveLoc + f'optStateDic_{cfg.phases[i-1]}_{cfg.exp_save_names[i-1]}'
             # Carry Adam's m/v across phase boundaries to avoid the lr*sign(g) first-step blow-up.
             if os.path.exists(prev_opt_path):
-                optimizer.load_state_dict(th.load(prev_opt_path))
+                optimizer.load_state_dict(th.load(prev_opt_path, weights_only=False))
             # The loaded optimizer contains moments for weights frozen at this
             # phase boundary. Zero only those entries; recurrent weights retain
             # their optimizer history and continue adapting normally.
@@ -139,7 +148,7 @@ def run_training(env, task, cfg):
         losses, endpoint_dev, lateral_dev, weights = train_batches(
             env=env, task=task, policy=policy, optimizer=optimizer, n_batches=n_batch,
             batch_size=cfg.batch_size, interval=interval, ep_dur=cfg.ep_dur, device=cfg.device, run_mode=run_mode,
-            force_field=force_field, contextual_cue=contextual_cue, k=k_value)
+            force_field=force_field, contextual_cue=contextual_cue, k=k_value, flip_cue=cfg.flip_cue)
 
         # Store results
         results[phase] = {
@@ -160,16 +169,16 @@ def run_training(env, task, cfg):
 def run_testing(env, task, cfg):
     n_t = int(cfg.ep_dur / env.effector.dt) + 1
     inputs, targets, init_states = task.generate(1, n_t)
-    test_data = {}
-    deviations = {}
-    for force_field,contextual_cue in zip(cfg.force_fields, cfg.contextual_cues):
-        for i, (phase, k_value, n_batch, run_mode) in enumerate(zip(cfg.phases, cfg.k_values, cfg.n_batches, cfg.run_modes)):
+    for force_field, contextual_cue in zip(cfg.force_fields, cfg.contextual_cues):
+        test_data = {}
+        deviations = {}
+        for i, (phase, k_value, n_batch, run_mode, exp_save_name) in enumerate(zip(cfg.phases, cfg.k_values, cfg.n_batches, cfg.run_modes, cfg.exp_save_names)):
             test_data[phase] = {}
             deviations[phase] = {}
             input_freeze, output_freeze, optimizer_mod, learning_rate = policy_mod(phase='growing_up')
             policy, optimizer = creat_policy(env=env, inputs=inputs, device=cfg.device, policy_func=mn.policy.ModularPolicyGRU,
                                              optimizer_mod=optimizer_mod, learning_rate=learning_rate)
-            weights = th.load(cfg.saveLoc + f'weightsDic_{phase}_{cfg.exp}')
+            weights = th.load(cfg.saveLoc + f'weightsDic_{phase}_{exp_save_name}', weights_only=False)
             for batch_number in weights.keys():
                 deviations[phase][batch_number] = {}
                 policy.load_state_dict(weights[batch_number])
@@ -177,22 +186,27 @@ def run_testing(env, task, cfg):
                 testdata, endpoint_dev, lateral_dev, endpoint_dev_batches, lateral_dev_batches = test_batches(env=env, task=task, policy=policy, n_batches=n_batch, batch_size=cfg.batch_size, interval=1,
                                         ep_dur=cfg.ep_dur, device=cfg.device, run_mode=run_mode,
                                         simulation_mode=cfg.mode, force_field=force_field, contextual_cue=contextual_cue,
-                                        k=k_value, is_channel = cfg.is_channel, title=f'{cfg.exp} - {phase} - {cfg.net_id} - batch = {batch_number}')
+                                        k=k_value, is_channel = cfg.is_channel, flip_cue=cfg.flip_cue, title=f'{cfg.exp} - {phase} - {cfg.net_id} - batch = {batch_number}')
                 test_data[phase][batch_number] = testdata
                 deviations[phase][batch_number]['lateral'] = lateral_dev
                 deviations[phase][batch_number]['endpoint'] = endpoint_dev
                 deviations[phase][batch_number]['lateral_all'] = lateral_dev_batches
                 deviations[phase][batch_number]['endpoint_all'] = endpoint_dev_batches
+                if cfg.is_channel is not None:
+                    fc_mean, fc_batch = calculate_force_compensation(task, testdata, flip_cue=cfg.flip_cue)
+                    deviations[phase][batch_number]['force_comp'] = [fc_mean]
+                    deviations[phase][batch_number]['force_comp_all'] = [fc_batch]
 
         suffix = '_channel' if cfg.is_channel is not None else ''
-        th.save(test_data, cfg.saveLoc + f"test_data_{cfg.exp}_{force_field}{suffix}")
-        th.save(deviations, cfg.saveLoc + f"deviations_{cfg.exp}_{force_field}{suffix}")
+        save_name = cfg.exp_save_names[0]
+        th.save(test_data, cfg.saveLoc + f"test_data_{save_name}_{force_field}{suffix}")
+        th.save(deviations, cfg.saveLoc + f"deviations_{save_name}_{force_field}{suffix}")
 
 
 
 
-def exp_simulation(net_id = 1, mode='test', exp='center_out'):
-    cfg = ExpConfig(net_id, mode = mode, exp_name=exp)
+def exp_simulation(net_id = 1, mode='test', exp='center_out', save_root=None):
+    cfg = ExpConfig(net_id, mode = mode, exp_name=exp, save_root=save_root)
     env, task = create_setup(cfg)
 
 

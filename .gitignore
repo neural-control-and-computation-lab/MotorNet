@@ -21,3 +21,4 @@ Thumbs.db
 
 # Run artifacts
 *.log
+MotorMemory/data/

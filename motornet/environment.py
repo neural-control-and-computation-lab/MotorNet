@@ -212,10 +212,13 @@ class Environment(gym.Env, th.nn.Module):
     
     self.effector.step(noisy_action, **kwargs)
 
-    obs = self.get_obs(action=noisy_action)
+    self._deterministic = deterministic
+    obs = self.get_obs(action=noisy_action, deterministic=deterministic)
+    self._deterministic = False
     reward = None if self.differentiable else np.zeros((self.detach(action.shape[0]), 1))
     truncated = False if self.differentiable else False
-    terminated = bool(self.elapsed >= self.max_ep_duration) or truncated
+    # Guard against binary float accumulation (e.g., 150 * 0.01 < 1.5) delaying termination by one step.
+    terminated = bool(self.elapsed >= self.max_ep_duration - 1e-8) or truncated
     self.goal = self.goal.clone()
     info = {
       "states": self._maybe_detach_states(),
@@ -279,6 +282,7 @@ class Environment(gym.Env, th.nn.Module):
     
     # initialize buffer
     action = th.zeros((batch_size, self.action_space.shape[0])).to(self.device)
+    self._deterministic = deterministic
     self.obs_buffer["proprioception"] = [self.get_proprioception()] * len(self.obs_buffer["proprioception"])
     self.obs_buffer["vision"] = [self.get_vision()] * len(self.obs_buffer["vision"])
     self.obs_buffer["action"] = [action] * self.action_frame_stacking
@@ -286,6 +290,7 @@ class Environment(gym.Env, th.nn.Module):
     action = action if self.differentiable else self.detach(action)
 
     obs = self.get_obs(deterministic=deterministic)
+    self._deterministic = False
     info = {
         "states": self._maybe_detach_states(),
         "action": action,
@@ -369,6 +374,8 @@ class Environment(gym.Env, th.nn.Module):
     Returns:
       A noisy version of `loc` as a `tensor`.
     """
+    if getattr(self, "_deterministic", False):
+      return loc
     white_noise = self.np_random.normal(size=(loc.shape[0], len(noise)), scale=noise)
     return loc + th.tensor(white_noise, dtype=th.float32).to(self.device)
 

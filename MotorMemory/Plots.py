@@ -22,6 +22,10 @@ plotor = mn.plotor.plot_pos_over_time
 
 #  Plot arm trajectories and errors relative to the target
 def plot_simulations(xy, target_xy, title = None):
+    if th.is_tensor(xy):
+        xy = xy.detach().cpu()
+    if th.is_tensor(target_xy):
+        target_xy = target_xy.detach().cpu()
     target_x = target_xy[:, -1, 0]
     target_y = target_xy[:, -1, 1]
 
@@ -153,7 +157,7 @@ def plot_episode_new(batch,episode_data, title = None):
     ax2[0].spines["right"].set_visible(False)
     ax2[0].set_ylim([-0.05, 0.2])
     ax2[0].set_xticks([])
-    ax2[0].text(55, 0.12, "goal", fontsize=10, ha="left", va="center")
+    ax2[0].text(0.55, 0.12, "goal", fontsize=10, ha="left", va="center")
     ax2[0].set_yticks([0, 0.1])
     ax2[0].tick_params(axis='y', labelsize=14)
 
@@ -201,7 +205,7 @@ def plot_motion(batch,episode_data, title = None, plot_from = 0, plot_to = None)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
     ax.tick_params(axis='both', labelsize=14)
-    ax.set_yticks([0, 0.4, 0.8, 0.12])
+    ax.set_yticks([0, 0.04, 0.08, 0.12])
     ax.set_xticks([0, 1.5])
     # ax.set_xlim([plot_from, plot_to])
     ax.set_ylim([-0.01, 0.13])
@@ -445,10 +449,8 @@ def plot_distance_matrix(distance_matrix, ordered_keys, data_label=None, title=N
     if ax is None:
         fig, ax = plt.subplots(figsize=(8, 8))
 
-    if max_value is None:
-        distance_matrix_norm = distance_matrix / distance_matrix.max()
-    else:
-        distance_matrix_norm = distance_matrix / max_value
+    denom = max_value if max_value is not None else distance_matrix.max()
+    distance_matrix_norm = distance_matrix / denom if denom > 0 else distance_matrix
 
     im = ax.imshow(distance_matrix_norm, cmap='viridis', vmin=0, vmax=1)
     
@@ -467,7 +469,8 @@ def plot_distance_matrix(distance_matrix, ordered_keys, data_label=None, title=N
     group_labels = []
     for (ds, phase), indices in groups.items():
         center = np.mean(indices)
-        label = f'{ds} - {phase}'
+        ds_name = data_label[ds] if (data_label is not None and isinstance(ds, int) and ds < len(data_label)) else ds
+        label = f'{ds_name} - {phase}'
         group_centers.append(center)
         group_labels.append(label)
 
@@ -480,12 +483,12 @@ def plot_distance_matrix(distance_matrix, ordered_keys, data_label=None, title=N
         ax.set_yticklabels([])
 
     phase_boundaries = []
-    current_phase = None
-    for i, (_, phase, _) in enumerate(ordered_keys):
-        if phase != current_phase:
-            if current_phase is not None:
+    current_group = None
+    for i, (ds, phase, _) in enumerate(ordered_keys):
+        if (ds, phase) != current_group:
+            if current_group is not None:
                 phase_boundaries.append(i)
-            current_phase = phase
+            current_group = (ds, phase)
 
     for boundary in phase_boundaries:
         ax.axhline(boundary - 0.5, color='white', linewidth=1.5)
@@ -575,7 +578,7 @@ def plot_neural_heatmap(hidden, title=None, batch_ind=0, ax=None, cmap='viridis'
 
 # The following are helpful for looking at individual network, phase or batch performance
 if __name__ == "__main__":
-    saveLoc = '/Users/pounemirzazadeh/Motornet/MultiNet/Modular_version'
+    saveLoc = '/Users/pounemirzazadeh/Motornet/MultiNet/Modular_version' if os.path.isdir('/Users/pounemirzazadeh') else os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'channel_test')
 
     exp_names = ['center_out']      # 'center_out', 'mov_diff_loc', 'pro_loc', 'vis_loc'
     phases = ['NF1', 'FF1', 'NF2']
@@ -588,7 +591,7 @@ if __name__ == "__main__":
             # Training results
             path_result = os.path.join(saveLoc, f"task_{net_id}", f"results_{exp}")
             print(path_result)
-            results = th.load(path_result)
+            results = th.load(path_result, map_location='cpu', weights_only=False)
             for phase, data in results.items():
                  plot_deviation(data['lateral_dev'], data['endpoint_dev'], title=f"Training Deviation, Network = {net_id}, Exp = {exp}, Phase = {phase}")
                  plot_training_loss(data['losses'], title=f"Loss, Network = {net_id}, Exp = {exp}, Phase = {phase}")
@@ -596,17 +599,17 @@ if __name__ == "__main__":
                 # Test results
                 path_test = os.path.join(saveLoc, f"task_{net_id}", f"test_data_{exp}_{force_field}")
                 path_dev = os.path.join(saveLoc, f"task_{net_id}", f"deviations_{exp}_{force_field}")
-                test_data = th.load(path_test)
-                dev_data = th.load(path_dev)
+                test_data = th.load(path_test, map_location='cpu', weights_only=False, mmap=True)
+                dev_data = th.load(path_dev, map_location='cpu', weights_only=False)
                 for phase in phases:
                     last_batch = list(test_data[phase])[-1]
                     first_batch = list(test_data[phase])[0]
-                    lateral_list = [th.tensor(dev_data[phase][b]['lateral']) for b in sorted(dev_data[phase].keys())]
-                    endpoint_list = [th.tensor(dev_data[phase][b]['endpoint']) for b in sorted(dev_data[phase].keys())]
-                    lateral_tensor = th.cat(lateral_list).flatten()
-                    endpoint_tensor = th.cat(endpoint_list).flatten()
                     batch_list = sorted(dev_data[phase].keys(), key=lambda x: int(x))
                     batch_list_ints = [int(b) for b in batch_list]
+                    lateral_list = [th.tensor(dev_data[phase][b]['lateral']) for b in batch_list]
+                    endpoint_list = [th.tensor(dev_data[phase][b]['endpoint']) for b in batch_list]
+                    lateral_tensor = th.cat(lateral_list).flatten()
+                    endpoint_tensor = th.cat(endpoint_list).flatten()
                     # Training deviations at the batch numbers we have saved to reconstruct during testing.
                     train_lateral_all = results[phase]['lateral_dev']
                     train_endpoint_all = results[phase]['endpoint_dev']
@@ -616,8 +619,8 @@ if __name__ == "__main__":
                         train_lateral_at_checkpoints.append(train_lateral_all[b])
                         train_endpoint_at_checkpoints.append(train_endpoint_all[b])
                     plot_subspace_ind(data = test_data[phase][last_batch], t_before_go=10, title=f"Activity, Network = {net_id}, Exp = {exp}, Phase = {phase}, Force_Field = {force_field}")
-                    plot_deviation(lateral_tensor, endpoint_tensor, title=f"Test Deviation, Network = {net_id}, Exp = {exp}, Phase = {phase}", batch_values=batch_list)
-                    plot_deviation(train_lateral_at_checkpoints, train_endpoint_at_checkpoints, title=f"Train Deviation, Network = {net_id}, Exp = {exp}, Phase = {phase}", batch_values=batch_list)
+                    plot_deviation(lateral_tensor, endpoint_tensor, title=f"Test Deviation, Network = {net_id}, Exp = {exp}, Phase = {phase}", batch_values=batch_list_ints)
+                    plot_deviation(train_lateral_at_checkpoints, train_endpoint_at_checkpoints, title=f"Train Deviation, Network = {net_id}, Exp = {exp}, Phase = {phase}", batch_values=batch_list_ints)
                     plot_motion(batch=first_batch, episode_data=test_data[phase][first_batch],
                                 title=f"{phase}, first batch", plot_from=0, plot_to=150)
                     plot_motion(batch=last_batch, episode_data=test_data[phase][last_batch],
